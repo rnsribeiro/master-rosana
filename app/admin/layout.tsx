@@ -69,11 +69,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               Painel Admin
             </Link>
             <nav className="text-sm text-zinc-300 flex gap-3">
+              <Link href="/admin/dashboard" className="hover:text-white">Dashboard</Link>
               <Link href="/admin/jogadores" className="hover:text-white">Jogadores</Link>
               <Link href="/admin/mensalidades" className="hover:text-white">Mensalidades</Link>
               <Link href="/admin/entradas/nova" className="hover:text-white">Nova Entrada</Link>
               <Link href="/admin/saidas/nova" className="hover:text-white">Nova Saída</Link>
+              <Link href="/admin/financeiro" className="hover:text-white">Financeiro</Link>
             </nav>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link
+              href="/"
+              className="text-sm text-zinc-300 hover:text-zinc-100"
+              title="Voltar para a Home (consulta do jogador)"
+            >
+              Home
+            </Link>
           </div>
           <div className="flex items-center gap-3 text-sm">
             <span className="text-zinc-400">{email}</span>

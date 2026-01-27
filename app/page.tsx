@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 
 type Statement = {
   months: Array<{
@@ -28,24 +28,9 @@ type Statement = {
   };
 };
 
-function n(v: unknown) {
+function n(v: any) {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
-}
-
-/* 🎨 Classes por status */
-function rowClassesByStatus(
-  status: "paid" | "partial" | "due" | "no_fee_config"
-) {
-  if (status === "paid") {
-    return "bg-emerald-950/30 border-emerald-900/50 text-emerald-300";
-  }
-
-  if (status === "partial" || status === "due") {
-    return "bg-red-950/30 border-red-900/50 text-red-300";
-  }
-
-  return "bg-zinc-950/40 text-zinc-400";
 }
 
 export default function Home() {
@@ -105,50 +90,58 @@ export default function Home() {
     return "Mensalidade não configurada";
   }
 
-  /* 🔒 Normalização segura */
-  const safe = useMemo(() => {
-    if (!statement) return null;
+  function rowClasses(status: Statement["months"][number]["status"]) {
+    if (status === "paid") return "bg-emerald-950/30 border-emerald-900/50 text-emerald-300";
+    if (status === "partial" || status === "due")
+      return "bg-red-950/30 border-red-900/50 text-red-300";
+    return "bg-zinc-950/40 text-zinc-400";
+  }
 
-    return {
-      credit: n(statement.credit),
-      summary: {
-        totalPaid: n(statement.summary?.totalPaid),
-        totalAllocated: n(statement.summary?.totalAllocated),
-        totalForgiven: n(statement.summary?.totalForgiven),
-        totalDue: n(statement.summary?.totalDue),
-      },
-      months: (statement.months ?? []).map((m) => ({
-        ...m,
-        fee: n(m.fee),
-        paid: n(m.paid),
-        forgiven: n(m.forgiven),
-        due: n(m.due),
-      })),
-      payments: (statement.payments ?? []).map((p) => ({
-        ...p,
-        amount: n(p.amount),
-      })),
-    };
-  }, [statement]);
+  // ✅ normaliza para evitar undefined
+  const safe = statement
+    ? {
+        ...statement,
+        credit: n(statement.credit),
+        summary: {
+          totalPaid: n(statement.summary?.totalPaid),
+          totalAllocated: n(statement.summary?.totalAllocated),
+          totalForgiven: n(statement.summary?.totalForgiven),
+          totalDue: n(statement.summary?.totalDue),
+        },
+        months: statement.months.map((m) => ({
+          ...m,
+          fee: n(m.fee),
+          paid: n(m.paid),
+          forgiven: n(m.forgiven),
+          due: n(m.due),
+        })),
+        payments: statement.payments.map((p) => ({
+          ...p,
+          amount: n(p.amount),
+        })),
+      }
+    : null;
 
   return (
     <main className="min-h-screen bg-zinc-950 text-zinc-100 p-6">
       <div className="max-w-4xl mx-auto">
-        {/* 🔑 Acesso Admin */}
-        <div className="flex justify-end mb-3">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold">Consulta de Contribuições</h1>
+            <p className="text-zinc-400 mt-1">
+              Digite parte do seu nome e seu PIN de 6 dígitos para ver seus pagamentos.
+            </p>
+          </div>
+
+          {/* link para o admin */}
           <a
             href="/admin"
-            className="text-sm text-zinc-400 hover:text-zinc-100 underline"
+            className="text-sm text-zinc-300 hover:text-zinc-100 underline underline-offset-4"
           >
-            Admin
+            Acessar Admin
           </a>
         </div>
-        <h1 className="text-2xl font-semibold">Consulta de Contribuições</h1>
-        <p className="text-zinc-400 mt-1">
-          Digite parte do seu nome e seu PIN de 6 dígitos para ver seus pagamentos.
-        </p>
 
-        {/* 🔎 Busca */}
         <div className="mt-6 bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4">
           <div className="grid md:grid-cols-3 gap-3">
             <div className="md:col-span-2">
@@ -156,6 +149,9 @@ export default function Home() {
               <input
                 value={nameQuery}
                 onChange={(e) => setNameQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSearch();
+                }}
                 className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none focus:border-zinc-600"
                 placeholder="Ex: ereira"
               />
@@ -164,9 +160,10 @@ export default function Home() {
               <label className="block text-sm text-zinc-300 mb-1">PIN</label>
               <input
                 value={pin}
-                onChange={(e) =>
-                  setPin(e.target.value.replace(/\D/g, "").slice(0, 6))
-                }
+                onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleSearch();
+                }}
                 className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none focus:border-zinc-600 tracking-widest"
                 placeholder="000000"
               />
@@ -188,80 +185,89 @@ export default function Home() {
           )}
         </div>
 
-        {/* 📊 Resultado */}
-        {statement && safe && (
+        {safe && (
           <div className="mt-6 space-y-6">
-            {/* Resumo */}
             <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4">
-              <div className="flex justify-between">
+              <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-2">
                 <div>
                   <div className="text-sm text-zinc-400">Jogador</div>
                   <div className="text-lg font-semibold">{playerName}</div>
                 </div>
                 <div className="text-right">
                   <div className="text-sm text-zinc-400">Crédito atual</div>
-                  <div className="text-2xl font-semibold">
-                    R$ {safe.credit.toFixed(2)}
-                  </div>
+                  <div className="text-2xl font-semibold">R$ {safe.credit.toFixed(2)}</div>
                 </div>
               </div>
 
               <div className="mt-4 grid md:grid-cols-4 gap-3 text-sm">
                 <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3">
-                  Total pago<br />
-                  <b>R$ {safe.summary.totalPaid.toFixed(2)}</b>
+                  <div className="text-zinc-400">Total pago</div>
+                  <div className="font-semibold">R$ {safe.summary.totalPaid.toFixed(2)}</div>
                 </div>
                 <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3">
-                  Total alocado<br />
-                  <b>R$ {safe.summary.totalAllocated.toFixed(2)}</b>
+                  <div className="text-zinc-400">Total alocado</div>
+                  <div className="font-semibold">R$ {safe.summary.totalAllocated.toFixed(2)}</div>
                 </div>
                 <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3">
-                  Total perdoado<br />
-                  <b>R$ {safe.summary.totalForgiven.toFixed(2)}</b>
+                  <div className="text-zinc-400">Total perdoado</div>
+                  <div className="font-semibold">R$ {safe.summary.totalForgiven.toFixed(2)}</div>
                 </div>
                 <div className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3">
-                  Total em aberto<br />
-                  <b>R$ {safe.summary.totalDue.toFixed(2)}</b>
+                  <div className="text-zinc-400">Total em aberto</div>
+                  <div className="font-semibold">R$ {safe.summary.totalDue.toFixed(2)}</div>
                 </div>
               </div>
             </div>
 
-            {/* 📅 Mensalidades */}
             <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4">
               <h2 className="text-lg font-semibold">Mensalidades (mês a mês)</h2>
-
               <div className="overflow-x-auto mt-3">
                 <table className="min-w-full text-sm">
                   <thead className="text-zinc-400">
                     <tr className="border-b border-zinc-800">
-                      <th className="text-left py-2">Mês</th>
-                      <th>Mensalidade</th>
-                      <th>Pago</th>
-                      <th>Perdoado</th>
-                      <th>Em aberto</th>
-                      <th>Status</th>
+                      <th className="text-left py-2 pr-4">Mês</th>
+                      <th className="text-left py-2 pr-4">Mensalidade</th>
+                      <th className="text-left py-2 pr-4">Pago</th>
+                      <th className="text-left py-2 pr-4">Perdoado</th>
+                      <th className="text-left py-2 pr-4">Em aberto</th>
+                      <th className="text-left py-2 pr-4">Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     {safe.months.map((m) => (
-                      <tr
-                        key={`${m.year}-${m.month}`}
-                        className={`border-b ${rowClassesByStatus(m.status)}`}
-                      >
-                        <td className="py-2">
+                      <tr key={`${m.year}-${m.month}`} className={`border-b ${rowClasses(m.status)}`}>
+                        <td className="py-2 pr-4">
                           {String(m.month).padStart(2, "0")}/{m.year}
                         </td>
-                        <td>R$ {m.fee.toFixed(2)}</td>
-                        <td>R$ {m.paid.toFixed(2)}</td>
-                        <td>R$ {m.forgiven.toFixed(2)}</td>
-                        <td>R$ {m.due.toFixed(2)}</td>
-                        <td className="font-medium">
-                          {statusLabel(m.status)}
-                        </td>
+                        <td className="py-2 pr-4">R$ {m.fee.toFixed(2)}</td>
+                        <td className="py-2 pr-4">R$ {m.paid.toFixed(2)}</td>
+                        <td className="py-2 pr-4">R$ {m.forgiven.toFixed(2)}</td>
+                        <td className="py-2 pr-4">R$ {m.due.toFixed(2)}</td>
+                        <td className="py-2 pr-4 font-medium">{statusLabel(m.status)}</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
+              </div>
+            </div>
+
+            <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4">
+              <h2 className="text-lg font-semibold">Pagamentos</h2>
+              <div className="mt-3 space-y-2">
+                {safe.payments.map((p) => (
+                  <div
+                    key={p.id}
+                    className="bg-zinc-950/60 border border-zinc-800 rounded-xl p-3 flex items-start justify-between gap-3"
+                  >
+                    <div>
+                      <div className="text-sm text-zinc-300">
+                        {new Date(p.date + "T00:00:00").toLocaleDateString("pt-BR")}
+                      </div>
+                      <div className="text-xs text-zinc-500">{p.description ?? "Sem descrição"}</div>
+                    </div>
+                    <div className="font-semibold">R$ {p.amount.toFixed(2)}</div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
