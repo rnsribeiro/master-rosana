@@ -153,7 +153,7 @@ export default function Home() {
                   if (e.key === "Enter") handleSearch();
                 }}
                 className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none focus:border-zinc-600"
-                placeholder="Ex: ereira"
+                placeholder="Ex: Rodrigo"
               />
             </div>
             <div>

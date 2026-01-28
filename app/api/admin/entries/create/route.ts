@@ -6,7 +6,7 @@ import { allocatePayment } from "@/lib/calc/allocatePayment";
 type Body = {
   date: string; // YYYY-MM-DD
   amount: number;
-  description?: string;
+  description?: string | null;
   player_id: string;
   target_year?: number | null;
 };
@@ -42,6 +42,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "player_id obrigatório" }, { status: 400 });
   }
 
+  const targetYear =
+    body.target_year != null && Number.isFinite(Number(body.target_year))
+      ? Number(body.target_year)
+      : new Date(date + "T00:00:00").getFullYear();
+
+  if (!Number.isInteger(targetYear) || targetYear < 2000 || targetYear > 2100) {
+    return NextResponse.json({ error: "Ano alvo inválido" }, { status: 400 });
+  }
+
   // 3) cria transação de entrada
   const { data: tx, error: txErr } = await supabaseAdmin
     .from("transactions")
@@ -51,7 +60,7 @@ export async function POST(req: Request) {
       amount,
       description: body.description ?? null,
       player_id: playerId,
-      target_year: body.target_year ?? null,
+      target_year: targetYear,
     })
     .select("id")
     .single();
@@ -66,7 +75,7 @@ export async function POST(req: Request) {
       await Promise.all([
         supabaseAdmin
           .from("player_memberships")
-          .select("started_at, ended_at")
+          .select("started_at, ended_at, billing_start_month")
           .eq("player_id", playerId)
           .order("started_at", { ascending: true }),
 
@@ -74,7 +83,7 @@ export async function POST(req: Request) {
 
         supabaseAdmin
           .from("allocations")
-          .select("year, month, amount")
+          .select("year, month, amount, transaction_id")
           .eq("player_id", playerId),
 
         supabaseAdmin
@@ -83,14 +92,13 @@ export async function POST(req: Request) {
           .eq("player_id", playerId),
       ]);
 
-    // se não tem período de participação, não aloca (vira "crédito" implícito)
-    // (o crédito é calculado como totalPaid - totalAllocated)
     const { newAllocations } = allocatePayment({
-      memberships: memberships ?? [],
+      memberships: (memberships ?? []) as any,
       amount,
-      fees: fees ?? [],
-      existingAllocations: allocs ?? [],
-      existingForgiveness: forg ?? [],
+      fees: (fees ?? []) as any,
+      existingAllocations: (allocs ?? []) as any,
+      existingForgiveness: (forg ?? []) as any,
+      targetYear,
     });
 
     // 5) grava allocations vinculadas à transaction
@@ -115,7 +123,7 @@ export async function POST(req: Request) {
       transaction_id: tx.id,
       allocations_created: newAllocations.length,
     });
-  } catch (e) {
+  } catch {
     // rollback simples: apaga a transação se algo falhar
     await supabaseAdmin.from("transactions").delete().eq("id", tx.id);
     return NextResponse.json({ error: "Erro ao alocar pagamento" }, { status: 500 });

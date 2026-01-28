@@ -1,211 +1,186 @@
 import { NextResponse } from "next/server";
-import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { supabaseAdmin } from "@/lib/supabase/admin";
+import { requireRole } from "@/lib/auth/requireRole";
+import { allocatePayment } from "@/lib/calc/allocatePayment";
 
-function n(v: unknown) {
-  const x = Number(v);
-  return Number.isFinite(x) ? x : 0;
+function isUuid(v: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-function isISODate(s: unknown) {
-  return typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+type PatchBody = {
+  date?: string; // YYYY-MM-DD
+  amount?: number;
+  description?: string | null;
+  target_year?: number | null;
+};
+
+async function getIdFromCtx(ctx: any): Promise<string> {
+  // Next 16: ctx.params pode ser Promise
+  const p = ctx?.params;
+  if (!p) return "";
+  const obj = typeof p.then === "function" ? await p : p;
+  return String(obj?.id ?? "");
 }
 
-async function requireRole(roles: Array<"admin" | "admin_viewer">) {
-  const supabase = await createSupabaseServerClient();
-  const { data: userRes } = await supabase.auth.getUser();
-  const user = userRes.user;
-  if (!user) return { ok: false as const, supabase, status: 401, error: "Não autenticado." };
-
-  const { data: profile } = await supabase.from("profiles").select("role").eq("id", user.id).single();
-  const role = profile?.role as "admin" | "admin_viewer" | undefined;
-
-  if (!role || !roles.includes(role)) {
-    return { ok: false as const, supabase, status: 403, error: "Sem permissão." };
+export async function PATCH(req: Request, ctx: any) {
+  const auth = await requireRole(req, ["admin"]);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
-  return { ok: true as const, supabase, role };
-}
-
-/**
- * Recria allocations para uma transação "in" com base no valor e mensalidade do ano alvo.
- * - Remove allocations antigas (transaction_id)
- * - Aplica o valor mês a mês (considerando já pago + perdoado)
- */
-async function rebuildAllocationsForPayment(params: {
-  supabase: Awaited<ReturnType<typeof createSupabaseServerClient>>;
-  transactionId: string;
-  playerId: string;
-  targetYear: number;
-  amount: number;
-}) {
-  const { supabase, transactionId, playerId, targetYear, amount } = params;
-
-  // remove allocations antigas desse pagamento
-  const { error: delErr } = await supabase
-    .from("allocations")
-    .delete()
-    .eq("transaction_id", transactionId);
-
-  if (delErr) throw new Error(delErr.message);
-
-  // mensalidade do ano
-  const { data: feeRow, error: feeErr } = await supabase
-    .from("year_fees")
-    .select("monthly_fee")
-    .eq("year", targetYear)
-    .single();
-
-  if (feeErr) throw new Error(feeErr.message);
-
-  const monthlyFee = n((feeRow as any)?.monthly_fee);
-  if (!(monthlyFee > 0)) return; // sem fee, não aloca
-
-  // já alocado (pagamentos) no ano
-  const { data: paidRows, error: paidErr } = await supabase
-    .from("allocations")
-    .select("month, amount")
-    .eq("player_id", playerId)
-    .eq("year", targetYear);
-
-  if (paidErr) throw new Error(paidErr.message);
-
-  const paidByMonth = new Map<number, number>();
-  for (const r of paidRows ?? []) {
-    const m = Number((r as any).month);
-    const a = n((r as any).amount);
-    paidByMonth.set(m, (paidByMonth.get(m) ?? 0) + a);
+  const id = await getIdFromCtx(ctx);
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "ID inválido." }, { status: 400 });
   }
 
-  // perdões no ano
-  const { data: forgRows, error: forgErr } = await supabase
-    .from("forgiveness")
-    .select("month, amount")
-    .eq("player_id", playerId)
-    .eq("year", targetYear);
+  const body = (await req.json().catch(() => ({}))) as PatchBody;
 
-  if (forgErr) throw new Error(forgErr.message);
+  const date = body.date != null ? String(body.date) : undefined;
+  const amount = body.amount != null ? Number(body.amount) : undefined;
+  const description = body.description !== undefined ? body.description : undefined;
+  const targetYear =
+    body.target_year !== undefined && body.target_year !== null
+      ? Number(body.target_year)
+      : body.target_year === null
+      ? null
+      : undefined;
 
-  const forgByMonth = new Map<number, number>();
-  for (const r of forgRows ?? []) {
-    const m = Number((r as any).month);
-    const a = n((r as any).amount);
-    forgByMonth.set(m, (forgByMonth.get(m) ?? 0) + a);
+  if (date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    return NextResponse.json({ error: "Data inválida (YYYY-MM-DD)." }, { status: 400 });
   }
-
-  // aloca mês a mês
-  let remaining = amount;
-  const inserts: Array<{
-    transaction_id: string;
-    player_id: string;
-    year: number;
-    month: number;
-    amount: number;
-  }> = [];
-
-  for (let month = 1; month <= 12 && remaining > 0.00001; month++) {
-    const already = n(paidByMonth.get(month) ?? 0) + n(forgByMonth.get(month) ?? 0);
-    const due = Math.max(monthlyFee - already, 0);
-    if (due <= 0) continue;
-
-    const alloc = Math.min(due, remaining);
-    inserts.push({
-      transaction_id: transactionId,
-      player_id: playerId,
-      year: targetYear,
-      month,
-      amount: Number(alloc.toFixed(2)),
-    });
-    remaining -= alloc;
-  }
-
-  if (inserts.length > 0) {
-    const { error: insErr } = await supabase.from("allocations").insert(inserts);
-    if (insErr) throw new Error(insErr.message);
-  }
-}
-
-// ✅ Next 16.1 / turbopack: params pode vir como Promise
-type Ctx = { params: Promise<{ id: string }> };
-
-export async function PATCH(req: Request, ctx: Ctx) {
-  const gate = await requireRole(["admin"]);
-  if (!gate.ok) return NextResponse.json({ error: gate.error }, { status: gate.status });
-
-  const supabase = gate.supabase;
-
-  const { id } = await ctx.params;
-
-  const body = await req.json().catch(() => ({}));
-
-  const date = body?.date;
-  const amount = n(body?.amount);
-  const description = typeof body?.description === "string" ? body.description : null;
-  const target_year = body?.target_year == null ? null : Number(body.target_year);
-
-  if (date != null && !isISODate(date)) {
-    return NextResponse.json({ error: "Data inválida (use yyyy-mm-dd)." }, { status: 400 });
-  }
-  if (!(amount > 0)) {
+  if (amount !== undefined && !(amount > 0)) {
     return NextResponse.json({ error: "Valor inválido." }, { status: 400 });
   }
-  if (target_year != null && !Number.isFinite(target_year)) {
-    return NextResponse.json({ error: "Ano inválido." }, { status: 400 });
+  if (targetYear !== undefined && targetYear !== null) {
+    if (!Number.isInteger(targetYear) || targetYear < 2000 || targetYear > 2100) {
+      return NextResponse.json({ error: "Ano alvo inválido." }, { status: 400 });
+    }
   }
 
-  // pega transação atual
-  const { data: current, error: curErr } = await supabase
+  // carrega tx atual
+  const { data: tx, error: txErr } = await supabaseAdmin
     .from("transactions")
-    .select("id, type, player_id, target_year")
+    .select("id, type, date, amount, description, player_id, target_year")
     .eq("id", id)
     .single();
 
-  if (curErr || !current) {
+  if (txErr || !tx) {
     return NextResponse.json({ error: "Registro não encontrado." }, { status: 404 });
   }
 
-  // atualiza
-  const { data: updated, error: upErr } = await supabase
+  const newTx = {
+    date: date ?? tx.date,
+    amount: amount ?? Number(tx.amount),
+    description: description === undefined ? tx.description : description,
+    target_year: targetYear === undefined ? tx.target_year : targetYear,
+  };
+
+  // atualiza tx
+  const { error: upErr } = await supabaseAdmin
     .from("transactions")
     .update({
-      date: date ?? undefined,
-      amount,
-      description,
-      target_year,
+      date: newTx.date,
+      amount: newTx.amount,
+      description: newTx.description ?? null,
+      target_year: newTx.target_year ?? null,
     })
-    .eq("id", id)
-    .select("id, type, date, amount, description, player_id, target_year, receipt_path, created_at")
-    .single();
+    .eq("id", id);
 
-  if (upErr || !updated) {
-    return NextResponse.json({ error: upErr?.message ?? "Falha ao atualizar." }, { status: 400 });
+  if (upErr) {
+    return NextResponse.json({ error: "Erro ao atualizar transação." }, { status: 500 });
   }
 
-  // se for entrada, recria allocations
-  if (updated.type === "in" && updated.player_id && updated.target_year) {
-    await rebuildAllocationsForPayment({
-      supabase,
-      transactionId: updated.id,
-      playerId: updated.player_id,
-      targetYear: Number(updated.target_year),
-      amount: n(updated.amount),
-    });
+  // se não for "entrada", não tem allocations para recalcular
+  if (tx.type !== "in") {
+    return NextResponse.json({ ok: true, allocations_rebuilt: false });
   }
 
-  return NextResponse.json({ transaction: updated });
+  // precisa de player_id para alocar
+  const playerId = tx.player_id;
+  if (!playerId) {
+    return NextResponse.json({ ok: true, allocations_rebuilt: false });
+  }
+
+  // ✅ REBUILD allocations: apaga allocations desta tx e recria com base no estado atual
+  // 1) apaga allocations da transação
+  const { error: delAllocErr } = await supabaseAdmin.from("allocations").delete().eq("transaction_id", id);
+  if (delAllocErr) {
+    return NextResponse.json({ error: "Erro ao remover allocations antigas." }, { status: 500 });
+  }
+
+  // 2) carrega dados para alocar novamente
+  const [{ data: memberships }, { data: fees }, { data: allocs }, { data: forg }] = await Promise.all([
+    supabaseAdmin
+      .from("player_memberships")
+      .select("started_at, ended_at, billing_start_month")
+      .eq("player_id", playerId)
+      .order("started_at", { ascending: true }),
+
+    supabaseAdmin.from("year_fees").select("year, monthly_fee"),
+
+    supabaseAdmin.from("allocations").select("year, month, amount").eq("player_id", playerId),
+
+    supabaseAdmin.from("forgiveness").select("year, month, amount").eq("player_id", playerId),
+  ]);
+
+  // se target_year ficou null, usa o ano da data
+  const effectiveTargetYear =
+    newTx.target_year != null && Number.isFinite(Number(newTx.target_year))
+      ? Number(newTx.target_year)
+      : new Date(newTx.date + "T00:00:00").getFullYear();
+
+  const { newAllocations } = allocatePayment({
+    memberships: (memberships ?? []) as any,
+    amount: Number(newTx.amount),
+    fees: (fees ?? []) as any,
+    existingAllocations: (allocs ?? []) as any,
+    existingForgiveness: (forg ?? []) as any,
+    targetYear: effectiveTargetYear,
+  });
+
+  if (newAllocations.length > 0) {
+    const { error: insErr } = await supabaseAdmin.from("allocations").insert(
+      newAllocations.map((a) => ({
+        transaction_id: id,
+        player_id: playerId,
+        year: a.year,
+        month: a.month,
+        amount: a.amount,
+      }))
+    );
+
+    if (insErr) {
+      return NextResponse.json({ error: "Erro ao recriar allocations." }, { status: 500 });
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    allocations_rebuilt: true,
+    allocations_created: newAllocations.length,
+    target_year_used: effectiveTargetYear,
+  });
 }
 
-export async function DELETE(_req: Request, ctx: Ctx) {
-  const gate = await requireRole(["admin"]);
-  if (!gate.ok) return NextResponse.json({ error: gate.error }, { status: gate.status });
+export async function DELETE(req: Request, ctx: any) {
+  const auth = await requireRole(req, ["admin"]);
+  if (!auth.ok) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
 
-  const supabase = gate.supabase;
+  const id = await getIdFromCtx(ctx);
+  if (!isUuid(id)) {
+    return NextResponse.json({ error: "ID inválido." }, { status: 400 });
+  }
 
-  const { id } = await ctx.params;
+  // remove allocations (se houver)
+  await supabaseAdmin.from("allocations").delete().eq("transaction_id", id);
 
-  // allocations são removidas por cascade
-  const { error } = await supabase.from("transactions").delete().eq("id", id);
-
-  if (error) return NextResponse.json({ error: error.message }, { status: 400 });
+  // remove transação
+  const { error } = await supabaseAdmin.from("transactions").delete().eq("id", id);
+  if (error) {
+    return NextResponse.json({ error: "Erro ao excluir transação." }, { status: 500 });
+  }
 
   return NextResponse.json({ ok: true });
 }
