@@ -6,30 +6,25 @@ import { supabase } from "@/lib/supabase/client";
 type Player = { id: string; full_name: string };
 
 function safeYearFromDate(dateISO: string) {
-  const d = new Date(dateISO + "T00:00:00");
-  const y = d.getFullYear();
-  return Number.isFinite(y) ? y : new Date().getFullYear();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) return "";
+  const y = new Date(dateISO + "T00:00:00").getFullYear();
+  return Number.isFinite(y) ? String(y) : "";
 }
 
 export default function NovaEntradaPage() {
   const [players, setPlayers] = useState<Player[]>([]);
-  const [playerId, setPlayerId] = useState("");
-
+  const [playerId, setPlayerId] = useState<string>(""); // "" => sem jogador
   const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [amount, setAmount] = useState<number>(0);
   const [description, setDescription] = useState("");
 
-  // ✅ Ano alvo editável
-  const defaultYear = useMemo(() => safeYearFromDate(date), [date]);
-  const [targetYear, setTargetYear] = useState<number>(() =>
-    safeYearFromDate(new Date().toISOString().slice(0, 10))
-  );
+  // ano alvo (só faz sentido quando tem jogador)
+  const computedYear = useMemo(() => safeYearFromDate(date), [date]);
+  const [targetYear, setTargetYear] = useState<string>("");
 
-  // quando a data mudar, só atualiza o targetYear automaticamente se o usuário ainda não mexeu nele
-  const [yearTouched, setYearTouched] = useState(false);
   useEffect(() => {
-    if (!yearTouched) setTargetYear(defaultYear);
-  }, [defaultYear, yearTouched]);
+    setTargetYear(computedYear);
+  }, [computedYear]);
 
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -41,16 +36,22 @@ export default function NovaEntradaPage() {
     })();
   }, []);
 
+  const hasPlayer = !!playerId;
+
   async function submit() {
     setMsg(null);
 
-    if (!playerId) return setMsg("Selecione um jogador.");
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return setMsg("Data inválida.");
-    if (!(amount > 0)) return setMsg("Valor deve ser maior que zero.");
-
-    const y = Number(targetYear);
-    if (!Number.isInteger(y) || y < 2000 || y > 2100) {
-      return setMsg("Ano alvo inválido (use algo entre 2000 e 2100).");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      setMsg("Data inválida.");
+      return;
+    }
+    if (!(amount > 0)) {
+      setMsg("Informe um valor maior que zero.");
+      return;
+    }
+    if (hasPlayer && !/^\d{4}$/.test(targetYear || "")) {
+      setMsg("Ano alvo inválido.");
+      return;
     }
 
     setLoading(true);
@@ -63,22 +64,24 @@ export default function NovaEntradaPage() {
       return;
     }
 
+    const payload = {
+      date,
+      amount,
+      description: description || undefined,
+      player_id: hasPlayer ? playerId : null, // ✅ null para patrocínio
+      target_year: hasPlayer ? Number(targetYear) : null,
+    };
+
     const res = await fetch("/api/admin/entries/create", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        date,
-        amount,
-        description: description || null,
-        player_id: playerId,
-        target_year: y, // ✅ usa o ano escolhido
-      }),
+      body: JSON.stringify(payload),
     });
 
-    const json = await res.json().catch(() => ({}));
+    const json = await res.json();
     setLoading(false);
 
     if (!res.ok) {
@@ -86,11 +89,15 @@ export default function NovaEntradaPage() {
       return;
     }
 
-    setMsg(`Entrada criada. Alocações: ${json.allocations_created}`);
+    setMsg(
+      hasPlayer
+        ? `Entrada criada. Alocações: ${json.allocations_created}`
+        : "Entrada criada (sem jogador)."
+    );
+
     setAmount(0);
     setDescription("");
-    setYearTouched(false);
-    setTargetYear(defaultYear);
+    // mantém seleção do jogador como está
   }
 
   return (
@@ -99,23 +106,26 @@ export default function NovaEntradaPage() {
 
       <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4 space-y-3">
         <div>
-          <label className="text-sm text-zinc-300">Jogador</label>
+          <label className="text-sm text-zinc-300">Jogador (opcional)</label>
           <select
             className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
             value={playerId}
             onChange={(e) => setPlayerId(e.target.value)}
           >
-            <option value="">Selecione...</option>
+            <option value="">Sem jogador (patrocínio / doação)</option>
             {players.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.full_name}
               </option>
             ))}
           </select>
+          <div className="text-xs text-zinc-500 mt-1">
+            Se não selecionar jogador, a entrada não será alocada em mensalidades.
+          </div>
         </div>
 
-        <div className="grid md:grid-cols-4 gap-3">
-          <div className="md:col-span-2">
+        <div className="grid md:grid-cols-3 gap-3">
+          <div>
             <label className="text-sm text-zinc-300">Data</label>
             <input
               type="date"
@@ -129,28 +139,25 @@ export default function NovaEntradaPage() {
             <label className="text-sm text-zinc-300">Valor</label>
             <input
               type="number"
-              inputMode="decimal"
-              step="0.01"
               className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
               value={Number.isFinite(amount) ? amount : 0}
               onChange={(e) => setAmount(Number(e.target.value))}
+              min={0}
+              step="0.01"
             />
           </div>
 
           <div>
             <label className="text-sm text-zinc-300">Ano alvo</label>
             <input
-              type="number"
-              inputMode="numeric"
-              className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
-              value={targetYear}
-              onChange={(e) => {
-                setYearTouched(true);
-                setTargetYear(Number(e.target.value));
-              }}
+              disabled={!hasPlayer}
+              className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 text-zinc-400 disabled:opacity-60"
+              value={hasPlayer ? targetYear : "-"}
+              onChange={(e) => setTargetYear(e.target.value.replace(/\D/g, "").slice(0, 4))}
+              placeholder="2025"
             />
-            <div className="mt-1 text-xs text-zinc-500">
-              Ex: pagar em 2026 mas abater 2025.
+            <div className="text-xs text-zinc-500 mt-1">
+              {hasPlayer ? "Para entradas com jogador, o ano define onde abater as mensalidades." : "Não aplicável."}
             </div>
           </div>
         </div>
@@ -161,23 +168,19 @@ export default function NovaEntradaPage() {
             className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
             value={description}
             onChange={(e) => setDescription(e.target.value)}
-            placeholder="Ex: acerto de mensalidades 2025"
+            placeholder={hasPlayer ? "Ex: mensalidade / acerto..." : "Ex: patrocínio / doação..."}
           />
         </div>
 
         <button
           onClick={submit}
-          disabled={loading || !playerId || amount <= 0}
+          disabled={loading || amount <= 0 || (hasPlayer && !playerId)}
           className="rounded-xl bg-zinc-100 text-zinc-950 px-4 py-2 font-medium disabled:opacity-60"
         >
           {loading ? "Salvando..." : "Salvar"}
         </button>
 
-        {msg && (
-          <div className="text-sm text-zinc-200 bg-zinc-950/60 border border-zinc-800 rounded-xl p-3">
-            {msg}
-          </div>
-        )}
+        {msg && <div className="text-sm text-zinc-200">{msg}</div>}
       </div>
     </div>
   );
