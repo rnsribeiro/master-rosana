@@ -6,7 +6,7 @@ import { allocatePayment } from "@/lib/calc/allocatePayment";
 type Body = {
   date: string; // YYYY-MM-DD
   amount: number;
-  description?: string | null;
+  description?: string;
   player_id: string;
   target_year?: number | null;
 };
@@ -29,6 +29,7 @@ export async function POST(req: Request) {
   const date = String(body.date || "");
   const amount = Number(body.amount || 0);
   const playerId = String(body.player_id || "");
+  const targetYear = body.target_year ?? null;
 
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
     return NextResponse.json({ error: "Data inválida (use YYYY-MM-DD)" }, { status: 400 });
@@ -42,14 +43,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "player_id obrigatório" }, { status: 400 });
   }
 
-  const targetYear =
-    body.target_year != null && Number.isFinite(Number(body.target_year))
-      ? Number(body.target_year)
+  const finalTargetYear =
+    typeof targetYear === "number" && Number.isFinite(targetYear)
+      ? targetYear
       : new Date(date + "T00:00:00").getFullYear();
-
-  if (!Number.isInteger(targetYear) || targetYear < 2000 || targetYear > 2100) {
-    return NextResponse.json({ error: "Ano alvo inválido" }, { status: 400 });
-  }
 
   // 3) cria transação de entrada
   const { data: tx, error: txErr } = await supabaseAdmin
@@ -60,7 +57,7 @@ export async function POST(req: Request) {
       amount,
       description: body.description ?? null,
       player_id: playerId,
-      target_year: targetYear,
+      target_year: finalTargetYear,
     })
     .select("id")
     .single();
@@ -83,7 +80,7 @@ export async function POST(req: Request) {
 
         supabaseAdmin
           .from("allocations")
-          .select("year, month, amount, transaction_id")
+          .select("year, month, amount")
           .eq("player_id", playerId),
 
         supabaseAdmin
@@ -93,12 +90,12 @@ export async function POST(req: Request) {
       ]);
 
     const { newAllocations } = allocatePayment({
-      memberships: (memberships ?? []) as any,
+      memberships: memberships ?? [],
       amount,
-      fees: (fees ?? []) as any,
-      existingAllocations: (allocs ?? []) as any,
-      existingForgiveness: (forg ?? []) as any,
-      targetYear,
+      fees: fees ?? [],
+      existingAllocations: allocs ?? [],
+      existingForgiveness: forg ?? [],
+      targetYear: finalTargetYear,
     });
 
     // 5) grava allocations vinculadas à transaction
@@ -123,7 +120,7 @@ export async function POST(req: Request) {
       transaction_id: tx.id,
       allocations_created: newAllocations.length,
     });
-  } catch {
+  } catch (e) {
     // rollback simples: apaga a transação se algo falhar
     await supabaseAdmin.from("transactions").delete().eq("id", tx.id);
     return NextResponse.json({ error: "Erro ao alocar pagamento" }, { status: 500 });

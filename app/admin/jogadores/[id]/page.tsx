@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { supabase } from "@/lib/supabase/client";
-import { generatePin6, sanitizePin, isValidPin } from "@/lib/utils/pin";
+import { sanitizePin, isValidPin } from "@/lib/utils/pin";
 import { toISODate } from "@/lib/utils/date";
 
 import { Button } from "@/components/ui/button";
@@ -34,27 +34,25 @@ function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
-function isISODate(v: string) {
-  return /^\d{4}-\d{2}-\d{2}$/.test(v);
+// YYYY-MM-01 -> YYYY-MM (para <input type="month">)
+function monthIsoToInput(v: string | null | undefined) {
+  if (!v) return "";
+  return String(v).slice(0, 7);
 }
 
-function isMonthValue(v: string) {
-  return /^\d{4}-\d{2}$/.test(v); // YYYY-MM
+// YYYY-MM -> YYYY-MM-01 (para banco)
+function monthInputToIso(v: string | null | undefined) {
+  const s = String(v ?? "").trim();
+  if (!/^\d{4}-\d{2}$/.test(s)) return null;
+  return `${s}-01`;
 }
 
-function isoToMonthValue(isoDate: string) {
-  // YYYY-MM-DD -> YYYY-MM
-  return isoDate.slice(0, 7);
-}
-
-function monthValueToISOFirstDay(yyyyMm: string) {
-  return `${yyyyMm}-01`;
-}
-
-function clampBillingMonthToStarted(startedAtISO: string, billingYm: string) {
-  // garante que billingYm >= month(startedAt)
-  const sYm = startedAtISO.slice(0, 7);
-  return billingYm < sYm ? sYm : billingYm;
+function fmtMonthPt(v: string | null | undefined) {
+  const ym = monthIsoToInput(v);
+  if (!ym) return "-";
+  const [y, m] = ym.split("-");
+  const d = new Date(Number(y), Number(m) - 1, 1);
+  return d.toLocaleDateString("pt-BR", { month: "long", year: "numeric" });
 }
 
 /* ===================== Page ===================== */
@@ -62,7 +60,7 @@ function clampBillingMonthToStarted(startedAtISO: string, billingYm: string) {
 export default function EditarJogadorPage() {
   /* -------- id seguro -------- */
   const params = useParams();
-  const rawId = String(params?.id ?? "");
+  const rawId = String((params as any)?.id ?? "");
   const playerId = useMemo(() => (isUuid(rawId) ? rawId : null), [rawId]);
 
   /* -------- estado -------- */
@@ -73,13 +71,18 @@ export default function EditarJogadorPage() {
   const [pin, setPin] = useState("");
   const [notes, setNotes] = useState("");
 
-  // abrir novo período
+  // Abrir novo período
   const [newStart, setNewStart] = useState<Date | undefined>(new Date());
-  const [newBillingYm, setNewBillingYm] = useState<string>(() => {
+  const [newBillingMonth, setNewBillingMonth] = useState<string>(() => {
     const d = new Date();
     const mm = String(d.getMonth() + 1).padStart(2, "0");
     return `${d.getFullYear()}-${mm}`;
   });
+
+  // edição “local” dos períodos (para não ficar salvando toda hora)
+  const [editMap, setEditMap] = useState<Record<string, { started: string; ended: string; billingMonth: string }>>(
+    {}
+  );
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -97,8 +100,9 @@ export default function EditarJogadorPage() {
     setLoading(true);
     setMsg(null);
 
-    const [{ data: p, error: pErr }, { data: m }] = await Promise.all([
+    const [{ data: p, error: pErr }, { data: m, error: mErr }] = await Promise.all([
       supabase.from("players").select("id, full_name, pin, notes").eq("id", playerId).single(),
+
       supabase
         .from("player_memberships")
         .select("id, player_id, started_at, ended_at, billing_start_month")
@@ -118,7 +122,21 @@ export default function EditarJogadorPage() {
     setFullName(p.full_name);
     setPin(p.pin);
     setNotes(p.notes ?? "");
-    setMemberships((m ?? []) as Membership[]);
+
+    const mems = (m ?? []) as Membership[];
+    setMemberships(mems);
+
+    // cria mapa de edição local
+    const nextMap: Record<string, { started: string; ended: string; billingMonth: string }> = {};
+    for (const mem of mems) {
+      nextMap[mem.id] = {
+        started: mem.started_at,
+        ended: mem.ended_at ?? "",
+        billingMonth: monthIsoToInput(mem.billing_start_month) || monthIsoToInput(mem.started_at) || "",
+      };
+    }
+    setEditMap(nextMap);
+
     setLoading(false);
   }
 
@@ -142,7 +160,11 @@ export default function EditarJogadorPage() {
     setSaving(true);
     const { error } = await supabase
       .from("players")
-      .update({ full_name: name, pin, notes: notes || null })
+      .update({
+        full_name: name,
+        pin,
+        notes: notes || null,
+      })
       .eq("id", playerId);
     setSaving(false);
 
@@ -154,22 +176,20 @@ export default function EditarJogadorPage() {
 
   async function openNewMembership() {
     if (!playerId) return;
-    if (!newStart) return setMsg("Selecione a data de início.");
+    setMsg(null);
+
+    if (!newStart) return setMsg("Selecione a data de início do período.");
     if (activeMembership) return setMsg("Já existe um período ativo.");
 
-    const startedAtISO = toISODate(newStart);
-    if (!isISODate(startedAtISO)) return setMsg("Data de início inválida.");
-    if (!isMonthValue(newBillingYm)) return setMsg("Mês de início de cobrança inválido.");
-
-    const billingYm = clampBillingMonthToStarted(startedAtISO, newBillingYm);
-    const billingStartISO = monthValueToISOFirstDay(billingYm);
+    const billingIso = monthInputToIso(newBillingMonth);
+    if (!billingIso) return setMsg("Selecione o mês de início da cobrança (YYYY-MM).");
 
     setSaving(true);
     const { error } = await supabase.from("player_memberships").insert({
       player_id: playerId,
-      started_at: startedAtISO,
+      started_at: toISODate(newStart),
       ended_at: null,
-      billing_start_month: billingStartISO,
+      billing_start_month: billingIso,
     });
     setSaving(false);
 
@@ -181,6 +201,7 @@ export default function EditarJogadorPage() {
 
   async function closeActiveMembership() {
     if (!activeMembership) return;
+    setMsg(null);
 
     setSaving(true);
     const { error } = await supabase
@@ -195,46 +216,45 @@ export default function EditarJogadorPage() {
     await load();
   }
 
-  async function updateMembership(params: {
-    memId: string;
-    started: Date;
-    ended?: Date;
-    billingYm: string; // YYYY-MM
-  }) {
-    const { memId, started, ended, billingYm } = params;
+  async function saveMembership(memId: string) {
+    const row = editMap[memId];
+    if (!row) return;
 
+    const started = row.started;
+    const ended = row.ended || null;
+    const billingIso = monthInputToIso(row.billingMonth);
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(started)) return setMsg("Data de início inválida.");
+    if (ended && !/^\d{4}-\d{2}-\d{2}$/.test(ended)) return setMsg("Data de fim inválida.");
     if (ended && ended < started) return setMsg("A data final não pode ser anterior à inicial.");
-
-    const startedISO = toISODate(started);
-    if (!isISODate(startedISO)) return setMsg("Data inicial inválida.");
-    if (!isMonthValue(billingYm)) return setMsg("Mês de início de cobrança inválido.");
-
-    const safeBillingYm = clampBillingMonthToStarted(startedISO, billingYm);
-    const billingISO = monthValueToISOFirstDay(safeBillingYm);
+    if (!billingIso) return setMsg("Mês de início da cobrança inválido.");
 
     setSaving(true);
     const { error } = await supabase
       .from("player_memberships")
       .update({
-        started_at: startedISO,
-        ended_at: ended ? toISODate(ended) : null,
-        billing_start_month: billingISO,
+        started_at: started,
+        ended_at: ended,
+        billing_start_month: billingIso,
       })
       .eq("id", memId);
     setSaving(false);
 
     if (error) return setMsg("Erro ao atualizar período.");
 
+    setMsg("Período atualizado.");
     await load();
   }
 
   async function deleteMembership(memId: string) {
+    setMsg(null);
     setSaving(true);
     const { error } = await supabase.from("player_memberships").delete().eq("id", memId);
     setSaving(false);
 
     if (error) return setMsg("Erro ao remover período.");
 
+    setMsg("Período removido.");
     await load();
   }
 
@@ -267,12 +287,10 @@ export default function EditarJogadorPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Editar Jogador</h1>
-          <p className="text-sm text-zinc-400">
-            Nome e PIN editáveis. Períodos podem ser pausados e retomados.
-          </p>
+          <p className="text-sm text-zinc-400">Nome, PIN e participação.</p>
         </div>
 
         <Link href="/admin/jogadores" className="rounded-xl border border-zinc-800 px-4 py-2">
@@ -281,226 +299,175 @@ export default function EditarJogadorPage() {
       </div>
 
       {/* Player */}
-      <div className="space-y-3 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-4">
+      <div className="space-y-3 rounded-2xl border border-zinc-800 p-4">
         <div className="grid md:grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-zinc-400">Nome</label>
+            <label className="text-sm text-zinc-300">Nome</label>
             <input
-              className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none"
+              className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
             />
           </div>
 
           <div>
-            <label className="text-xs text-zinc-400">PIN</label>
-            <div className="mt-1 flex gap-2">
-              <input
-                className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none font-mono"
-                value={pin}
-                onChange={(e) => setPin(sanitizePin(e.target.value))}
-              />
-              <Button type="button" variant="outline" onClick={() => setPin(generatePin6())} disabled={saving}>
-                Gerar
-              </Button>
-            </div>
+            <label className="text-sm text-zinc-300">PIN</label>
+            <input
+              className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 font-mono tracking-widest"
+              value={pin}
+              onChange={(e) => setPin(sanitizePin(e.target.value))}
+            />
           </div>
         </div>
 
         <div>
-          <label className="text-xs text-zinc-400">Observações</label>
+          <label className="text-sm text-zinc-300">Observações</label>
           <textarea
-            className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none min-h-24"
+            className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 min-h-24"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Observações"
           />
         </div>
 
-        <div className="flex items-center gap-2">
-          <Button onClick={savePlayer} disabled={saving}>
-            Salvar jogador
-          </Button>
-          {msg && <div className="text-sm text-zinc-300">{msg}</div>}
-        </div>
+        <Button onClick={savePlayer} disabled={saving}>
+          Salvar jogador
+        </Button>
+
+        {msg && (
+          <div className="text-sm text-zinc-200 bg-zinc-950/60 border border-zinc-800 rounded-xl p-3">{msg}</div>
+        )}
       </div>
 
       {/* Memberships */}
-      <div className="space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900/30 p-4">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+      <div className="space-y-4 rounded-2xl border border-zinc-800 p-4">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold">Participação</h2>
           {activeMembership ? (
-            <div className="text-xs text-emerald-300 bg-emerald-950/30 border border-emerald-900/40 rounded-xl px-3 py-2">
+            <span className="text-xs rounded-full px-2 py-1 bg-emerald-900/40 border border-emerald-800 text-emerald-200">
               Período ativo em aberto
-            </div>
+            </span>
           ) : (
-            <div className="text-xs text-zinc-400">Sem período ativo</div>
+            <span className="text-xs rounded-full px-2 py-1 bg-zinc-900/60 border border-zinc-800 text-zinc-300">
+              Sem período ativo
+            </span>
           )}
         </div>
 
         {/* Abrir novo período */}
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
-          <div className="text-sm font-medium">Abrir novo período</div>
-          <div className="text-xs text-zinc-500 mt-1">
-            Você pode cadastrar o jogador hoje, mas fazer ele começar a pagar só a partir de um mês específico.
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+          <div>
+            <div className="font-medium">Abrir novo período</div>
+            <div className="text-sm text-zinc-400">
+              Você pode cadastrar o jogador hoje, mas fazer ele começar a pagar a partir de um mês específico.
+            </div>
           </div>
 
-          <div className="mt-4 grid md:grid-cols-3 gap-3">
+          <div className="grid md:grid-cols-3 gap-3 items-end">
             <div>
-              <label className="text-xs text-zinc-400">Início do período (participação)</label>
+              <label className="text-sm text-zinc-300">Início do período (participação)</label>
               <div className="mt-1">
                 <DatePicker date={newStart} onChange={setNewStart} />
               </div>
             </div>
 
-            <div className="px-2">
-              <label className="text-xs text-zinc-400">Começa a pagar a partir de</label>
+            <div>
+              <label className="text-sm text-zinc-300">Começa a pagar a partir de</label>
               <input
                 type="month"
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none"
-                value={newBillingYm}
-                onChange={(e) => setNewBillingYm(e.target.value)}
+                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
+                value={newBillingMonth}
+                onChange={(e) => setNewBillingMonth(e.target.value)}
               />
               <div className="text-xs text-zinc-500 mt-1">Cobrança conta só a partir deste mês.</div>
             </div>
 
-            <div className="flex items-end gap-2">
+            <div className="flex gap-2 md:justify-end">
               <Button onClick={openNewMembership} disabled={saving}>
                 Abrir período
               </Button>
-              <Button
-                variant="outline"
-                onClick={closeActiveMembership}
-                disabled={saving || !activeMembership}
-                title={!activeMembership ? "Não há período ativo para encerrar" : ""}
-              >
-                Encerrar hoje
-              </Button>
+              {activeMembership && (
+                <Button variant="outline" onClick={closeActiveMembership} disabled={saving}>
+                  Encerrar hoje
+                </Button>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Períodos existentes */}
-        <div className="space-y-3">
-          <div className="text-sm font-medium">Períodos cadastrados</div>
+        {/* Períodos cadastrados */}
+        <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-4 space-y-3">
+          <div className="font-medium">Períodos cadastrados</div>
 
-          {memberships.map((m) => {
-            const startedDate = new Date(m.started_at + "T00:00:00");
-            const endedDate = m.ended_at ? new Date(m.ended_at + "T00:00:00") : undefined;
+          <div className="space-y-3">
+            {memberships.map((m) => {
+              const row = editMap[m.id] ?? {
+                started: m.started_at,
+                ended: m.ended_at ?? "",
+                billingMonth: monthIsoToInput(m.billing_start_month) || monthIsoToInput(m.started_at) || "",
+              };
 
-            const billingYmInitial =
-              m.billing_start_month && isISODate(m.billing_start_month)
-                ? isoToMonthValue(m.billing_start_month)
-                : isoToMonthValue(m.started_at);
+              return (
+                <div key={m.id} className="rounded-2xl border border-zinc-800 p-4">
+                  <div className="grid md:grid-cols-4 gap-3 items-end">
+                    <div>
+                      <label className="text-sm text-zinc-300">Início</label>
+                      <input
+                        type="date"
+                        className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
+                        value={row.started}
+                        onChange={(e) =>
+                          setEditMap((prev) => ({ ...prev, [m.id]: { ...row, started: e.target.value } }))
+                        }
+                      />
+                    </div>
 
-            return (
-              <MembershipRow
-                key={m.id}
-                membership={m}
-                startedDate={startedDate}
-                endedDate={endedDate}
-                billingYmInitial={billingYmInitial}
-                saving={saving}
-                onSave={(started, ended, billingYm) => updateMembership({ memId: m.id, started, ended, billingYm })}
-                onDelete={() => deleteMembership(m.id)}
-              />
-            );
-          })}
+                    <div>
+                      <label className="text-sm text-zinc-300">Fim</label>
+                      <input
+                        type="date"
+                        className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
+                        value={row.ended}
+                        onChange={(e) =>
+                          setEditMap((prev) => ({ ...prev, [m.id]: { ...row, ended: e.target.value } }))
+                        }
+                        placeholder="Em aberto"
+                      />
+                    </div>
 
-          {memberships.length === 0 && (
-            <div className="text-sm text-zinc-400">
-              Nenhum período. Abra um período para o jogador começar a contribuir.
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
+                    <div>
+                      <label className="text-sm text-zinc-300">Começa a pagar</label>
+                      <input
+                        type="month"
+                        className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
+                        value={row.billingMonth}
+                        onChange={(e) =>
+                          setEditMap((prev) => ({ ...prev, [m.id]: { ...row, billingMonth: e.target.value } }))
+                        }
+                      />
+                      <div className="text-xs text-zinc-500 mt-1">Atual: {fmtMonthPt(m.billing_start_month)}</div>
+                    </div>
 
-/* ===================== Subcomponent ===================== */
+                    <div className="flex gap-2 md:justify-end">
+                      <Button variant="outline" onClick={() => saveMembership(m.id)} disabled={saving}>
+                        Salvar período
+                      </Button>
+                      <Button variant="outline" onClick={() => deleteMembership(m.id)} disabled={saving}>
+                        Remover
+                      </Button>
+                    </div>
+                  </div>
 
-function MembershipRow(props: {
-  membership: Membership;
-  startedDate: Date;
-  endedDate?: Date;
-  billingYmInitial: string;
-  saving: boolean;
-  onSave: (started: Date, ended: Date | undefined, billingYm: string) => void;
-  onDelete: () => void;
-}) {
-  const { membership, startedDate, endedDate, billingYmInitial, saving, onSave, onDelete } = props;
+                  <div className="text-xs text-zinc-500 mt-3">ID: {m.id}</div>
+                </div>
+              );
+            })}
 
-  const [started, setStarted] = useState<Date | undefined>(startedDate);
-  const [ended, setEnded] = useState<Date | undefined>(endedDate);
-  const [billingYm, setBillingYm] = useState<string>(billingYmInitial);
-
-  function doSave() {
-    if (!started) return;
-    onSave(started, ended, billingYm);
-  }
-
-  return (
-    <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
-      <div className="grid md:grid-cols-12 gap-3 items-end">
-        <div className="md:col-span-4">
-          <label className="text-xs text-zinc-400">Início</label>
-          <div className="mt-1">
-            <DatePicker
-              date={started}
-              onChange={(d) => {
-                if (!d) return;
-                setStarted(d);
-              }}
-            />
-          </div>
-        </div>
-
-        <div className="md:col-span-4">
-          <label className="text-xs text-zinc-400">Fim</label>
-          <div className="mt-1">
-            <DatePicker
-              date={ended}
-              onChange={(d) => setEnded(d)}
-              placeholder="Em aberto"
-            />
-          </div>
-        </div>
-
-        <div className="md:col-span-4">
-          <label className="text-xs text-zinc-400">Começa a pagar</label>
-          <input
-            type="month"
-            className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none"
-            value={billingYm}
-            onChange={(e) => setBillingYm(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                doSave();
-              }
-            }}
-          />
-        </div>
-
-        <div className="md:col-span-12 flex flex-wrap items-center justify-between gap-2 mt-2">
-          <div className="flex items-center gap-2">
-            <Button variant="outline" onClick={doSave} disabled={saving || !started}>
-              Salvar período
-            </Button>
-            <Button variant="outline" onClick={onDelete} disabled={saving}>
-              Remover
-            </Button>
-
-            {membership.ended_at === null && (
-              <span className="text-xs text-emerald-300 bg-emerald-950/30 border border-emerald-900/40 rounded-xl px-2 py-1">
-                Ativo
-              </span>
+            {memberships.length === 0 && (
+              <div className="text-sm text-zinc-400">
+                Nenhum período. Abra um período para o jogador começar a contribuir.
+              </div>
             )}
-          </div>
-
-          <div className="text-[11px] text-zinc-500">
-            ID: <span className="font-mono">{membership.id}</span>
           </div>
         </div>
       </div>
