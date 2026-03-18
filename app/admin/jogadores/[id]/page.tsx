@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 
 import { supabase } from "@/lib/supabase/client";
 import { sanitizePin, isValidPin } from "@/lib/utils/pin";
@@ -59,8 +59,9 @@ function fmtMonthPt(v: string | null | undefined) {
 
 export default function EditarJogadorPage() {
   /* -------- id seguro -------- */
-  const params = useParams();
-  const rawId = String((params as any)?.id ?? "");
+  const params = useParams<{ id: string }>();
+  const router = useRouter();
+  const rawId = String(params?.id ?? "");
   const playerId = useMemo(() => (isUuid(rawId) ? rawId : null), [rawId]);
 
   /* -------- estado -------- */
@@ -86,6 +87,7 @@ export default function EditarJogadorPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   /* ===================== Load ===================== */
@@ -100,7 +102,7 @@ export default function EditarJogadorPage() {
     setLoading(true);
     setMsg(null);
 
-    const [{ data: p, error: pErr }, { data: m, error: mErr }] = await Promise.all([
+    const [{ data: p, error: pErr }, { data: m }] = await Promise.all([
       supabase.from("players").select("id, full_name, pin, notes").eq("id", playerId).single(),
 
       supabase
@@ -258,6 +260,63 @@ export default function EditarJogadorPage() {
     await load();
   }
 
+  async function deletePlayer() {
+    if (!playerId || !player) return;
+
+    const confirmed = confirm(
+      `Excluir o jogador "${player.full_name}"?\n\n` +
+        "Isso tambem removera periodos, transacoes, allocations e perdoes vinculados a ele."
+    );
+
+    if (!confirmed) return;
+
+    setMsg(null);
+    setDeleting(true);
+
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+
+      if (!token) {
+        setMsg("Sessao invalida. Faça login novamente.");
+        return;
+      }
+
+      const res = await fetch(`/api/admin/players/${playerId}`, {
+        method: "DELETE",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        deleted?: {
+          allocations: number;
+          forgiveness: number;
+          memberships: number;
+          transactions: number;
+        };
+      };
+
+      if (!res.ok) {
+        setMsg(json.error ?? "Erro ao excluir jogador.");
+        return;
+      }
+
+      const deleted = json.deleted;
+      const summary = deleted
+        ? `Transacoes: ${deleted.transactions}, periodos: ${deleted.memberships}, allocations: ${deleted.allocations}, perdoes: ${deleted.forgiveness}.`
+        : "";
+
+      alert(`Jogador excluido com sucesso. ${summary}`.trim());
+      router.push("/admin/jogadores");
+      router.refresh();
+    } finally {
+      setDeleting(false);
+    }
+  }
+
   /* ===================== Render ===================== */
 
   if (loading) return <div className="text-zinc-400">Carregando…</div>;
@@ -337,6 +396,26 @@ export default function EditarJogadorPage() {
         {msg && (
           <div className="text-sm text-zinc-200 bg-zinc-950/60 border border-zinc-800 rounded-xl p-3">{msg}</div>
         )}
+      </div>
+
+      <div className="space-y-3 rounded-2xl border border-red-900/50 bg-red-950/15 p-4">
+        <div>
+          <h2 className="text-lg font-semibold text-red-100">Zona de exclusao</h2>
+          <p className="text-sm text-red-200/80">
+            A exclusao remove definitivamente o jogador e tambem os periodos, transacoes,
+            allocations e perdoes vinculados a ele.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-sm text-red-200/70">
+            Use apenas quando tiver certeza. Essa acao nao pode ser desfeita pelo sistema.
+          </div>
+
+          <Button variant="destructive" onClick={deletePlayer} disabled={deleting || saving}>
+            {deleting ? "Excluindo..." : "Excluir jogador"}
+          </Button>
+        </div>
       </div>
 
       {/* Memberships */}

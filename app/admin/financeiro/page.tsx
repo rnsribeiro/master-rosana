@@ -25,9 +25,131 @@ type Summary = {
   totalOpenDue: number;
 };
 
-function n(v: any) {
+type SummaryResponse = Partial<Summary> & {
+  error?: string;
+};
+
+type TxApiRelation = {
+  full_name: string | null;
+};
+
+type TxApiRow = Omit<TxRow, "amount" | "target_year" | "player_name"> & {
+  amount: number | string | null;
+  target_year: number | string | null;
+  player_name?: string | null;
+  players?: TxApiRelation[] | TxApiRelation | null;
+};
+
+type TransactionsResponse = {
+  error?: string;
+  transactions?: TxApiRow[];
+};
+
+type SnapshotFormat = "svg" | "png" | "pdf";
+type TypeFilter = "all" | "in" | "out";
+type ReceiptFilter = "all" | "with" | "without";
+
+function n(v: unknown) {
   const x = Number(v);
   return Number.isFinite(x) ? x : 0;
+}
+
+function getPlayerName(tx: TxApiRow) {
+  if (tx.player_name) return tx.player_name;
+  if (Array.isArray(tx.players)) return tx.players[0]?.full_name ?? null;
+  return tx.players?.full_name ?? null;
+}
+
+function getErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof Error && error.message) return error.message;
+  return fallback;
+}
+
+function downloadBlob(blob: Blob, fileName: string) {
+  const objectUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = objectUrl;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  window.URL.revokeObjectURL(objectUrl);
+}
+
+async function blobToDataUrl(blob: Blob) {
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result;
+      if (typeof result === "string") resolve(result);
+      else reject(new Error("Falha ao converter arquivo para data URL."));
+    };
+    reader.onerror = () => reject(new Error("Falha ao ler o arquivo gerado."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+function getSvgDimensions(svgText: string) {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(svgText, "image/svg+xml");
+  const svg = doc.documentElement;
+
+  const widthAttr = svg.getAttribute("width");
+  const heightAttr = svg.getAttribute("height");
+  const viewBox = svg.getAttribute("viewBox");
+
+  const width = widthAttr ? Number(widthAttr) : 0;
+  const height = heightAttr ? Number(heightAttr) : 0;
+
+  if (width > 0 && height > 0) {
+    return { width, height };
+  }
+
+  if (viewBox) {
+    const [, , vbWidth, vbHeight] = viewBox.split(/\s+/).map(Number);
+    if (vbWidth > 0 && vbHeight > 0) {
+      return { width: vbWidth, height: vbHeight };
+    }
+  }
+
+  throw new Error("Nao foi possivel identificar o tamanho do SVG.");
+}
+
+async function svgToPngBlob(svgText: string, width: number, height: number) {
+  const svgBlob = new Blob([svgText], { type: "image/svg+xml;charset=utf-8" });
+  const svgUrl = window.URL.createObjectURL(svgBlob);
+
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = () => reject(new Error("Falha ao carregar a imagem SVG."));
+      img.src = svgUrl;
+    });
+
+    const scale = 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * scale));
+    canvas.height = Math.max(1, Math.round(height * scale));
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Falha ao criar o canvas para exportacao.");
+    }
+
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    return await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((blob) => {
+        if (blob) resolve(blob);
+        else reject(new Error("Falha ao gerar o arquivo PNG."));
+      }, "image/png");
+    });
+  } finally {
+    window.URL.revokeObjectURL(svgUrl);
+  }
 }
 
 function ymLabel(dateISO: string) {
@@ -44,7 +166,15 @@ export default function FinanceiroAdminPage() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [snapshotYear, setSnapshotYear] = useState(String(new Date().getFullYear()));
+  const [snapshotLoading, setSnapshotLoading] = useState<SnapshotFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [dateYearFilter, setDateYearFilter] = useState("all");
+  const [monthFilter, setMonthFilter] = useState("all");
+  const [receiptFilter, setReceiptFilter] = useState<ReceiptFilter>("all");
 
   // modal edição
   const [editOpen, setEditOpen] = useState(false);
@@ -71,8 +201,8 @@ export default function FinanceiroAdminPage() {
         fetch("/api/admin/finance/transactions?limit=500"),
       ]);
 
-      const sData = await sRes.json().catch(() => ({}));
-      const tData = await tRes.json().catch(() => ({}));
+      const sData = (await sRes.json().catch(() => ({}))) as SummaryResponse;
+      const tData = (await tRes.json().catch(() => ({}))) as TransactionsResponse;
 
       if (!sRes.ok) throw new Error(sData?.error ?? "Erro ao carregar resumo.");
       if (!tRes.ok) throw new Error(tData?.error ?? "Erro ao carregar transações.");
@@ -85,15 +215,21 @@ export default function FinanceiroAdminPage() {
       });
 
       setTxs(
-        (tData.transactions ?? []).map((t: any) => ({
-          ...t,
+        (tData.transactions ?? []).map((t) => ({
+          id: t.id,
+          type: t.type,
+          date: t.date,
           amount: n(t.amount),
+          description: t.description,
+          player_id: t.player_id,
           target_year: t.target_year == null ? null : Number(t.target_year),
-          player_name: t.player_name ?? t.players?.full_name ?? null,
+          receipt_path: t.receipt_path,
+          created_at: t.created_at,
+          player_name: getPlayerName(t),
         }))
       );
-    } catch (e: any) {
-      setError(e?.message ?? "Falha ao carregar.");
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, "Falha ao carregar."));
     } finally {
       setLoading(false);
     }
@@ -128,6 +264,52 @@ export default function FinanceiroAdminPage() {
   const totalOut = summary?.totalOut ?? 0;
   const cash = summary?.cash ?? 0;
   const openDue = summary?.totalOpenDue ?? 0;
+
+  const yearOptions = useMemo(() => {
+    return Array.from(new Set(txs.map((tx) => tx.date.slice(0, 4)))).sort(
+      (a, b) => Number(b) - Number(a)
+    );
+  }, [txs]);
+
+  const filteredTxs = useMemo(() => {
+    const search = searchTerm.trim().toLowerCase();
+
+    return txs.filter((tx) => {
+      if (typeFilter !== "all" && tx.type !== typeFilter) return false;
+
+      const txYear = tx.date.slice(0, 4);
+      if (dateYearFilter !== "all" && txYear !== dateYearFilter) return false;
+
+      const txMonth = tx.date.slice(5, 7);
+      if (monthFilter !== "all" && txMonth !== monthFilter) return false;
+
+      if (receiptFilter === "with" && !tx.receipt_path) return false;
+      if (receiptFilter === "without" && tx.receipt_path) return false;
+
+      if (!search) return true;
+
+      const haystack = [
+        tx.description ?? "",
+        tx.player_name ?? "",
+        tx.type === "in" ? "entrada" : "saida",
+        tx.amount.toFixed(2),
+        tx.date,
+        tx.target_year != null ? String(tx.target_year) : "",
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      return haystack.includes(search);
+    });
+  }, [txs, searchTerm, typeFilter, dateYearFilter, monthFilter, receiptFilter]);
+
+  function clearFilters() {
+    setSearchTerm("");
+    setTypeFilter("all");
+    setDateYearFilter("all");
+    setMonthFilter("all");
+    setReceiptFilter("all");
+  }
 
   function openEdit(t: TxRow) {
     setEditTx(t);
@@ -196,8 +378,8 @@ export default function FinanceiroAdminPage() {
 
       closeEdit();
       await load();
-    } catch (e: any) {
-      setError(e?.message ?? "Falha ao salvar.");
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, "Falha ao salvar."));
     } finally {
       setLoading(false);
     }
@@ -226,10 +408,112 @@ export default function FinanceiroAdminPage() {
       }
 
       await load();
-    } catch (e: any) {
-      setError(e?.message ?? "Falha ao excluir.");
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, "Falha ao excluir."));
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function exportSpreadsheet() {
+    setExporting(true);
+    setError(null);
+
+    try {
+      const res = await fetch("/api/admin/finance/export");
+      const body = await res.blob();
+
+      if (!res.ok) {
+        let message = "Erro ao exportar planilha.";
+
+        try {
+          const parsed = JSON.parse(await body.text());
+          message = parsed?.error ?? message;
+        } catch {
+          // noop
+        }
+
+        throw new Error(message);
+      }
+
+      downloadBlob(
+        body,
+        `transacoes-financeiras-${new Date().toISOString().slice(0, 10)}.xlsx`
+      );
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, "Falha ao exportar."));
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function fetchAnnualSvg(year: number) {
+    const res = await fetch(`/api/admin/finance/annual-status/image?year=${year}`);
+    const body = await res.text();
+
+    if (!res.ok) {
+      let message = "Erro ao gerar imagem anual.";
+
+      try {
+        const parsed = JSON.parse(body) as { error?: string };
+        message = parsed?.error ?? message;
+      } catch {
+        // noop
+      }
+
+      throw new Error(message);
+    }
+
+    const { width, height } = getSvgDimensions(body);
+    return { svgText: body, width, height };
+  }
+
+  async function exportAnnualImage(format: SnapshotFormat) {
+    const year = Number(snapshotYear);
+    if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+      setError("Informe um ano valido entre 2000 e 2100.");
+      return;
+    }
+
+    setSnapshotLoading(format);
+    setError(null);
+
+    try {
+      const { svgText, width, height } = await fetchAnnualSvg(year);
+
+      if (format === "svg") {
+        downloadBlob(
+          new Blob([svgText], { type: "image/svg+xml;charset=utf-8" }),
+          `mensalidades-${year}.svg`
+        );
+        return;
+      }
+
+      const pngBlob = await svgToPngBlob(svgText, width, height);
+
+      if (format === "png") {
+        downloadBlob(pngBlob, `mensalidades-${year}.png`);
+        return;
+      }
+
+      const { jsPDF } = await import("jspdf");
+      const pngDataUrl = await blobToDataUrl(pngBlob);
+      const pageWidth = Math.max(300, width * 0.75);
+      const pageHeight = Math.max(200, height * 0.75);
+      const pdf = new jsPDF({
+        orientation: pageWidth >= pageHeight ? "landscape" : "portrait",
+        unit: "pt",
+        format: [pageWidth, pageHeight],
+        compress: true,
+      });
+
+      pdf.addImage(pngDataUrl, "PNG", 0, 0, pageWidth, pageHeight, undefined, "FAST");
+      const pdfBlob = pdf.output("blob");
+      downloadBlob(pdfBlob, `mensalidades-${year}.pdf`);
+    } catch (error: unknown) {
+      setError(getErrorMessage(error, "Falha ao gerar imagem."));
+    } finally {
+      setSnapshotLoading(null);
     }
   }
 
@@ -237,13 +521,72 @@ export default function FinanceiroAdminPage() {
     <div className="space-y-4">
       <div className="flex items-end justify-between gap-3">
         <h1 className="text-2xl font-semibold">Financeiro</h1>
-        <button
-          onClick={load}
-          disabled={loading}
-          className="rounded-xl bg-zinc-100 text-zinc-950 px-4 py-2 font-medium disabled:opacity-60"
-        >
-          {loading ? "Atualizando..." : "Atualizar"}
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            onClick={exportSpreadsheet}
+            disabled={exporting}
+            className="rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60"
+          >
+            {exporting ? "Exportando..." : "Exportar transacoes"}
+          </button>
+          <button
+            onClick={load}
+            disabled={loading}
+            className="rounded-xl bg-zinc-100 text-zinc-950 px-4 py-2 font-medium disabled:opacity-60"
+          >
+            {loading ? "Atualizando..." : "Atualizar"}
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Quadro anual de mensalidades</h2>
+            <p className="text-sm text-zinc-400">
+              Gera um quadro anual com os jogadores nas linhas e os meses do ano nas colunas.
+              Verde significa pago, amarelo parcial, vermelho em aberto e cinza sem cobranca.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-end gap-2">
+            <div>
+              <label className="text-sm text-zinc-300">Ano</label>
+              <input
+                type="number"
+                min={2000}
+                max={2100}
+                value={snapshotYear}
+                onChange={(e) => setSnapshotYear(e.target.value)}
+                className="mt-1 w-32 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
+              />
+            </div>
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => exportAnnualImage("svg")}
+                disabled={snapshotLoading !== null}
+                className="rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60"
+              >
+                {snapshotLoading === "svg" ? "Gerando SVG..." : "Baixar SVG"}
+              </button>
+              <button
+                onClick={() => exportAnnualImage("png")}
+                disabled={snapshotLoading !== null}
+                className="rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60"
+              >
+                {snapshotLoading === "png" ? "Gerando PNG..." : "Baixar PNG"}
+              </button>
+              <button
+                onClick={() => exportAnnualImage("pdf")}
+                disabled={snapshotLoading !== null}
+                className="rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60"
+              >
+                {snapshotLoading === "pdf" ? "Gerando PDF..." : "Baixar PDF"}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       {error && (
@@ -288,6 +631,98 @@ export default function FinanceiroAdminPage() {
 
       <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4">
         <h2 className="text-lg font-semibold">Todas as transações</h2>
+        <div className="mt-3 grid gap-3 md:grid-cols-5">
+          <div className="md:col-span-2">
+            <label className="text-sm text-zinc-300">Buscar</label>
+            <input
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
+              placeholder="Jogador, descricao, valor..."
+            />
+          </div>
+
+          <div>
+            <label className="text-sm text-zinc-300">Tipo</label>
+            <select
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value as TypeFilter)}
+              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
+            >
+              <option value="all">Todos</option>
+              <option value="in">Entradas</option>
+              <option value="out">Saidas</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="text-sm text-zinc-300">Ano da data</label>
+            <select
+              value={dateYearFilter}
+              onChange={(e) => setDateYearFilter(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
+            >
+              <option value="all">Todos</option>
+              {yearOptions.map((year) => (
+                <option key={year} value={year}>
+                  {year}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="text-sm text-zinc-300">Mes</label>
+            <select
+              value={monthFilter}
+              onChange={(e) => setMonthFilter(e.target.value)}
+              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
+            >
+              <option value="all">Todos</option>
+              <option value="01">Janeiro</option>
+              <option value="02">Fevereiro</option>
+              <option value="03">Marco</option>
+              <option value="04">Abril</option>
+              <option value="05">Maio</option>
+              <option value="06">Junho</option>
+              <option value="07">Julho</option>
+              <option value="08">Agosto</option>
+              <option value="09">Setembro</option>
+              <option value="10">Outubro</option>
+              <option value="11">Novembro</option>
+              <option value="12">Dezembro</option>
+            </select>
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
+          <div className="w-full md:w-56">
+            <label className="text-sm text-zinc-300">Comprovante</label>
+            <select
+              value={receiptFilter}
+              onChange={(e) => setReceiptFilter(e.target.value as ReceiptFilter)}
+              className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
+            >
+              <option value="all">Todos</option>
+              <option value="with">Com comprovante</option>
+              <option value="without">Sem comprovante</option>
+            </select>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="text-sm text-zinc-400">
+              Exibindo <span className="text-zinc-200">{filteredTxs.length}</span> de{" "}
+              <span className="text-zinc-200">{txs.length}</span> registro(s)
+            </div>
+            <button
+              onClick={clearFilters}
+              className="rounded-xl border border-zinc-800 px-4 py-2 text-sm hover:border-zinc-600"
+            >
+              Limpar filtros
+            </button>
+          </div>
+        </div>
+
         <div className="overflow-x-auto mt-3">
           <table className="min-w-full text-sm">
             <thead className="text-zinc-400">
@@ -304,7 +739,7 @@ export default function FinanceiroAdminPage() {
             </thead>
 
             <tbody>
-              {txs.map((t) => {
+              {filteredTxs.map((t) => {
                 const isIn = t.type === "in";
                 return (
                   <tr
@@ -359,7 +794,7 @@ export default function FinanceiroAdminPage() {
                 );
               })}
 
-              {txs.length === 0 && (
+              {filteredTxs.length === 0 && (
                 <tr>
                   <td className="py-4 text-zinc-500" colSpan={8}>
                     Nenhuma transação encontrada.

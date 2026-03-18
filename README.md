@@ -34,3 +34,29 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Supabase backup
+
+This project includes a reusable backup command for the Supabase data used by the app:
+
+```bash
+npm run backup:supabase
+```
+
+The command reads `.env.local`, exports the application tables to `JSON` and `CSV`, and also downloads files from the `receipts` storage bucket when available.
+
+Backups are written to:
+
+```bash
+backups/supabase-YYYYMMDD-HHMMSS
+```
+
+Each backup folder contains a `manifest.json` with the exported tables, row counts, and storage files.
+
+## Finance export
+
+The admin page at `/admin/financeiro` now includes an `Exportar planilha` action that downloads an `.xlsx` file with:
+
+- Summary totals
+- All financial transactions
+- Monthly entries vs. expenses
