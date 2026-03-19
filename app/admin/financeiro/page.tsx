@@ -598,21 +598,21 @@ export default function FinanceiroAdminPage() {
                 disabled={snapshotLoading !== null}
                 className="w-full rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60 sm:w-auto"
               >
-                {snapshotLoading === "svg" ? "Gerando SVG..." : "Baixar SVG"}
+                {snapshotLoading === "svg" ? "Gerando SVG..." : "SVG"}
               </button>
               <button
                 onClick={() => exportAnnualImage("png")}
                 disabled={snapshotLoading !== null}
                 className="w-full rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60 sm:w-auto"
               >
-                {snapshotLoading === "png" ? "Gerando PNG..." : "Baixar PNG"}
+                {snapshotLoading === "png" ? "Gerando PNG..." : "PNG"}
               </button>
               <button
                 onClick={() => exportAnnualImage("pdf")}
                 disabled={snapshotLoading !== null}
                 className="w-full rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60 sm:w-auto"
               >
-                {snapshotLoading === "pdf" ? "Gerando PDF..." : "Baixar PDF"}
+                {snapshotLoading === "pdf" ? "Gerando PDF..." : "PDF"}
               </button>
             </div>
           </div>
