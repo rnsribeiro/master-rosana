@@ -4,6 +4,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { useAdminRole } from "@/components/admin/admin-role-provider";
+import { ReadOnlyBanner } from "@/components/admin/admin-access-notice";
 
 type TxRow = {
   id: string;
@@ -162,7 +164,21 @@ function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
 
+function openReceipt(transactionId: string) {
+  window.open(`/api/admin/finance/receipts/${transactionId}`, "_blank", "noopener,noreferrer");
+}
+
+function downloadReceiptFile(transactionId: string) {
+  const a = document.createElement("a");
+  a.href = `/api/admin/finance/receipts/${transactionId}?download=1`;
+  a.rel = "noopener noreferrer";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 export default function FinanceiroAdminPage() {
+  const { canEdit } = useAdminRole();
   const [summary, setSummary] = useState<Summary | null>(null);
   const [txs, setTxs] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -312,6 +328,7 @@ export default function FinanceiroAdminPage() {
   }
 
   function openEdit(t: TxRow) {
+    if (!canEdit) return;
     setEditTx(t);
     setEDate(t.date);
     setEAmount(t.amount);
@@ -327,6 +344,10 @@ export default function FinanceiroAdminPage() {
 
   async function saveEdit() {
     if (!editTx) return;
+    if (!canEdit) {
+      setError("Seu perfil esta em modo somente leitura.");
+      return;
+    }
 
     if (!/^\d{4}-\d{2}-\d{2}$/.test(eDate)) {
       setError("Data inválida (YYYY-MM-DD).");
@@ -386,6 +407,11 @@ export default function FinanceiroAdminPage() {
   }
 
   async function deleteTx(t: TxRow) {
+    if (!canEdit) {
+      setError("Seu perfil esta em modo somente leitura.");
+      return;
+    }
+
     if (!confirm("Excluir este registro?")) return;
 
     setLoading(true);
@@ -519,25 +545,29 @@ export default function FinanceiroAdminPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-end justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <h1 className="text-2xl font-semibold">Financeiro</h1>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
           <button
             onClick={exportSpreadsheet}
             disabled={exporting}
-            className="rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60"
+            className="w-full rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60 sm:w-auto"
           >
             {exporting ? "Exportando..." : "Exportar transacoes"}
           </button>
           <button
             onClick={load}
             disabled={loading}
-            className="rounded-xl bg-zinc-100 text-zinc-950 px-4 py-2 font-medium disabled:opacity-60"
+            className="w-full rounded-xl bg-zinc-100 px-4 py-2 font-medium text-zinc-950 disabled:opacity-60 sm:w-auto"
           >
             {loading ? "Atualizando..." : "Atualizar"}
           </button>
         </div>
       </div>
+
+      {!canEdit && (
+        <ReadOnlyBanner description="Seu perfil pode consultar transacoes, comprovantes e exportacoes, mas nao pode editar ou excluir lancamentos." />
+      )}
 
       <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-4">
         <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
@@ -549,8 +579,8 @@ export default function FinanceiroAdminPage() {
             </p>
           </div>
 
-          <div className="flex flex-wrap items-end gap-2">
-            <div>
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row sm:flex-wrap sm:items-end sm:justify-end">
+            <div className="w-full sm:w-auto">
               <label className="text-sm text-zinc-300">Ano</label>
               <input
                 type="number"
@@ -558,29 +588,29 @@ export default function FinanceiroAdminPage() {
                 max={2100}
                 value={snapshotYear}
                 onChange={(e) => setSnapshotYear(e.target.value)}
-                className="mt-1 w-32 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2"
+                className="mt-1 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 sm:w-32"
               />
             </div>
 
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
               <button
                 onClick={() => exportAnnualImage("svg")}
                 disabled={snapshotLoading !== null}
-                className="rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60"
+                className="w-full rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60 sm:w-auto"
               >
                 {snapshotLoading === "svg" ? "Gerando SVG..." : "Baixar SVG"}
               </button>
               <button
                 onClick={() => exportAnnualImage("png")}
                 disabled={snapshotLoading !== null}
-                className="rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60"
+                className="w-full rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60 sm:w-auto"
               >
                 {snapshotLoading === "png" ? "Gerando PNG..." : "Baixar PNG"}
               </button>
               <button
                 onClick={() => exportAnnualImage("pdf")}
                 disabled={snapshotLoading !== null}
-                className="rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60"
+                className="w-full rounded-xl border border-zinc-700 px-4 py-2 font-medium hover:border-zinc-500 disabled:opacity-60 sm:w-auto"
               >
                 {snapshotLoading === "pdf" ? "Gerando PDF..." : "Baixar PDF"}
               </button>
@@ -734,7 +764,7 @@ export default function FinanceiroAdminPage() {
                 <th className="text-left py-2 pr-4">Jogador</th>
                 <th className="text-left py-2 pr-4">Ano</th>
                 <th className="text-left py-2 pr-4">Comprovante</th>
-                <th className="text-left py-2 pr-4">Ações</th>
+                {canEdit && <th className="text-left py-2 pr-4">Acoes</th>}
               </tr>
             </thead>
 
@@ -772,31 +802,52 @@ export default function FinanceiroAdminPage() {
                     </td>
 
                     <td className="py-2 pr-4">{t.target_year ?? "-"}</td>
-                    <td className="py-2 pr-4">{t.receipt_path ? <span className="text-zinc-300">OK</span> : "-"}</td>
-
                     <td className="py-2 pr-4">
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => openEdit(t)}
-                          className="rounded-lg border border-zinc-800 px-3 py-1 hover:border-zinc-600"
-                        >
-                          Editar
-                        </button>
-                        <button
-                          onClick={() => deleteTx(t)}
-                          className="rounded-lg border border-red-900/60 text-red-200 px-3 py-1 hover:border-red-700"
-                        >
-                          Excluir
-                        </button>
-                      </div>
+                      {t.receipt_path ? (
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            onClick={() => openReceipt(t.id)}
+                            className="rounded-lg border border-zinc-800 px-3 py-1 hover:border-zinc-600"
+                          >
+                            Ver
+                          </button>
+                          <button
+                            onClick={() => downloadReceiptFile(t.id)}
+                            className="rounded-lg border border-zinc-800 px-3 py-1 hover:border-zinc-600"
+                          >
+                            Baixar
+                          </button>
+                        </div>
+                      ) : (
+                        "-"
+                      )}
                     </td>
+
+                    {canEdit && (
+                      <td className="py-2 pr-4">
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => openEdit(t)}
+                            className="rounded-lg border border-zinc-800 px-3 py-1 hover:border-zinc-600"
+                          >
+                            Editar
+                          </button>
+                          <button
+                            onClick={() => deleteTx(t)}
+                            className="rounded-lg border border-red-900/60 text-red-200 px-3 py-1 hover:border-red-700"
+                          >
+                            Excluir
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 );
               })}
 
               {filteredTxs.length === 0 && (
                 <tr>
-                  <td className="py-4 text-zinc-500" colSpan={8}>
+                  <td className="py-4 text-zinc-500" colSpan={canEdit ? 8 : 7}>
                     Nenhuma transação encontrada.
                   </td>
                 </tr>
@@ -807,7 +858,7 @@ export default function FinanceiroAdminPage() {
       </div>
 
       {/* Modal simples */}
-      {editOpen && editTx && (
+      {canEdit && editOpen && editTx && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-xl rounded-2xl border border-zinc-800 bg-zinc-950 p-5">
             <div className="flex items-start justify-between gap-3">

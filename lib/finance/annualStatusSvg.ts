@@ -39,14 +39,22 @@ function statusStyle(status: AnnualStatusCellStatus) {
   }
 }
 
-export function renderAnnualStatusSvg(grid: AnnualStatusGrid) {
+export function renderAnnualStatusSvg(
+  grid: AnnualStatusGrid,
+  options?: { generatedAtLabel?: string; lastUpdatedLabel?: string }
+) {
   const padding = 28;
   const titleHeight = 34;
   const subtitleHeight = 24;
+  const infoCardHeight = 44;
+  const infoCardGap = 10;
+  const infoSectionHeight = infoCardHeight * 2 + infoCardGap;
   const legendHeight = 28;
+  const gapBeforeLegend = 12;
   const gapAfterLegend = 18;
   const headerHeight = 34;
   const rowHeight = 30;
+  const bottomPadding = 20;
   const nameColWidth = 260;
   const monthColWidth = 88;
   const totalWidth = padding * 2 + nameColWidth + monthColWidth * 12;
@@ -54,13 +62,17 @@ export function renderAnnualStatusSvg(grid: AnnualStatusGrid) {
     padding * 2 +
     titleHeight +
     subtitleHeight +
+    infoSectionHeight +
+    gapBeforeLegend +
     legendHeight +
     gapAfterLegend +
     headerHeight +
     rowHeight * grid.rows.length +
-    24;
+    bottomPadding;
 
-  const headerY = padding + titleHeight + subtitleHeight + legendHeight + gapAfterLegend;
+  const infoY = padding + titleHeight + subtitleHeight + 8;
+  const legendY = infoY + infoSectionHeight + gapBeforeLegend;
+  const headerY = legendY + legendHeight + gapAfterLegend;
   const bodyStartY = headerY + headerHeight;
 
   const legendItems = [
@@ -74,7 +86,7 @@ export function renderAnnualStatusSvg(grid: AnnualStatusGrid) {
   const legend = legendItems
     .map((item, index) => {
       const x = padding + index * 178;
-      const y = padding + titleHeight + subtitleHeight + 6;
+      const y = legendY;
       return [
         `<rect x="${x}" y="${y}" width="16" height="16" rx="4" fill="${item.color}" stroke="#94a3b8" />`,
         `<text x="${x + 24}" y="${y + 12}" font-size="12" fill="#334155">${escapeXml(item.label)}</text>`,
@@ -119,6 +131,46 @@ export function renderAnnualStatusSvg(grid: AnnualStatusGrid) {
     })
     .join("");
 
+  const generatedAtLabel = options?.generatedAtLabel?.trim();
+  const lastUpdatedLabel = options?.lastUpdatedLabel?.trim();
+  const generatedText = generatedAtLabel
+    ? `Gerado em ${generatedAtLabel}`
+    : "Gerado automaticamente pelo sistema.";
+  const lastUpdatedText = lastUpdatedLabel
+    ? `Ultimo registro encontrado em ${lastUpdatedLabel}`
+    : "Ultimo registro encontrado em: informacao indisponivel.";
+
+  const infoCards = [
+    {
+      title: "ULTIMA ATUALIZACAO",
+      value: lastUpdatedText,
+      y: infoY,
+      fill: "#dbeafe",
+      stroke: "#60a5fa",
+      titleColor: "#1d4ed8",
+      valueColor: "#0f172a",
+    },
+    {
+      title: "ARQUIVO GERADO",
+      value: generatedText,
+      y: infoY + infoCardHeight + infoCardGap,
+      fill: "#fef3c7",
+      stroke: "#f59e0b",
+      titleColor: "#92400e",
+      valueColor: "#451a03",
+    },
+  ]
+    .map((card) => {
+      const cardWidth = totalWidth - padding * 2;
+
+      return [
+        `<rect x="${padding}" y="${card.y}" width="${cardWidth}" height="${infoCardHeight}" rx="14" fill="${card.fill}" stroke="${card.stroke}" stroke-width="1.5" />`,
+        `<text x="${padding + 16}" y="${card.y + 16}" font-size="11" font-weight="700" fill="${card.titleColor}">${escapeXml(card.title)}</text>`,
+        `<text x="${padding + 16}" y="${card.y + 32}" font-size="13" font-weight="700" fill="${card.valueColor}">${escapeXml(card.value)}</text>`,
+      ].join("");
+    })
+    .join("");
+
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="${totalWidth}" height="${totalHeight}" viewBox="0 0 ${totalWidth} ${totalHeight}" role="img" aria-labelledby="title desc">
   <title id="title">Quadro anual de mensalidades ${grid.year}</title>
@@ -126,6 +178,7 @@ export function renderAnnualStatusSvg(grid: AnnualStatusGrid) {
   <rect width="100%" height="100%" fill="#f8fafc" />
   <text x="${padding}" y="${padding + 6}" font-size="26" font-weight="700" fill="#0f172a">Quadro anual de mensalidades ${grid.year}</text>
   <text x="${padding}" y="${padding + 30}" font-size="13" fill="#475569">Gerado automaticamente com base nas alocacoes, perdoes e periodos de participacao.</text>
+  ${infoCards}
   ${legend}
   ${headerCells}
   ${rows}

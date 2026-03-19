@@ -50,7 +50,7 @@ function rowClassByStatus(status: Statement["months"][number]["status"]) {
 
 export default function DashboardAdminPage() {
   const searchParams = useSearchParams();
-  const playerFromUrl = searchParams.get("player");
+  const playerFromUrl = searchParams.get("playerId") ?? searchParams.get("player");
 
   const [players, setPlayers] = useState<Player[]>([]);
   const [loadingPlayers, setLoadingPlayers] = useState(false);
@@ -122,7 +122,6 @@ export default function DashboardAdminPage() {
   useEffect(() => {
     if (!selectedPlayerId) return;
     loadStatement(selectedPlayerId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPlayerId]);
 
   const sortedPayments = useMemo(() => {

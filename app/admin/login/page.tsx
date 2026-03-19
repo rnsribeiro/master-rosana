@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
@@ -33,9 +34,9 @@ export default function AdminLoginPage() {
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center p-6">
       <div className="w-full max-w-md bg-zinc-900/50 border border-zinc-800 rounded-2xl p-5 space-y-4">
-        <h1 className="text-2xl font-semibold">Login Admin</h1>
+        <h1 className="text-2xl font-semibold">Login do painel</h1>
         <p className="text-zinc-400 text-sm">
-          Entre com seu e-mail e senha para acessar o painel.
+          Entre com seu e-mail e senha para acessar o painel como admin ou viewer.
         </p>
 
         <form
@@ -83,12 +84,12 @@ export default function AdminLoginPage() {
           </div>
         )}
 
-        <a
+        <Link
           href="/"
           className="text-sm text-zinc-300 hover:text-zinc-100 underline underline-offset-4"
         >
           Voltar para a Home
-        </a>
+        </Link>
       </div>
     </div>
   );

@@ -8,6 +8,8 @@ import { supabase } from "@/lib/supabase/client";
 import { sanitizePin, isValidPin } from "@/lib/utils/pin";
 import { toISODate } from "@/lib/utils/date";
 
+import { useAdminRole } from "@/components/admin/admin-role-provider";
+import { ReadOnlyBanner } from "@/components/admin/admin-access-notice";
 import { Button } from "@/components/ui/button";
 import { DatePicker } from "@/components/date-picker";
 
@@ -58,6 +60,7 @@ function fmtMonthPt(v: string | null | undefined) {
 /* ===================== Page ===================== */
 
 export default function EditarJogadorPage() {
+  const { canEdit } = useAdminRole();
   /* -------- id seguro -------- */
   const params = useParams<{ id: string }>();
   const router = useRouter();
@@ -153,6 +156,11 @@ export default function EditarJogadorPage() {
 
   async function savePlayer() {
     if (!playerId) return;
+    if (!canEdit) {
+      setMsg("Seu perfil esta em modo somente leitura.");
+      return;
+    }
+
     setMsg(null);
 
     const name = fullName.trim();
@@ -178,6 +186,11 @@ export default function EditarJogadorPage() {
 
   async function openNewMembership() {
     if (!playerId) return;
+    if (!canEdit) {
+      setMsg("Seu perfil esta em modo somente leitura.");
+      return;
+    }
+
     setMsg(null);
 
     if (!newStart) return setMsg("Selecione a data de início do período.");
@@ -203,6 +216,11 @@ export default function EditarJogadorPage() {
 
   async function closeActiveMembership() {
     if (!activeMembership) return;
+    if (!canEdit) {
+      setMsg("Seu perfil esta em modo somente leitura.");
+      return;
+    }
+
     setMsg(null);
 
     setSaving(true);
@@ -219,6 +237,11 @@ export default function EditarJogadorPage() {
   }
 
   async function saveMembership(memId: string) {
+    if (!canEdit) {
+      setMsg("Seu perfil esta em modo somente leitura.");
+      return;
+    }
+
     const row = editMap[memId];
     if (!row) return;
 
@@ -249,6 +272,11 @@ export default function EditarJogadorPage() {
   }
 
   async function deleteMembership(memId: string) {
+    if (!canEdit) {
+      setMsg("Seu perfil esta em modo somente leitura.");
+      return;
+    }
+
     setMsg(null);
     setSaving(true);
     const { error } = await supabase.from("player_memberships").delete().eq("id", memId);
@@ -262,6 +290,10 @@ export default function EditarJogadorPage() {
 
   async function deletePlayer() {
     if (!playerId || !player) return;
+    if (!canEdit) {
+      setMsg("Seu perfil esta em modo somente leitura.");
+      return;
+    }
 
     const confirmed = confirm(
       `Excluir o jogador "${player.full_name}"?\n\n` +
@@ -348,7 +380,7 @@ export default function EditarJogadorPage() {
       {/* Header */}
       <div className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Editar Jogador</h1>
+          <h1 className="text-2xl font-semibold">{canEdit ? "Editar Jogador" : "Jogador"}</h1>
           <p className="text-sm text-zinc-400">Nome, PIN e participação.</p>
         </div>
 
@@ -356,6 +388,10 @@ export default function EditarJogadorPage() {
           Voltar
         </Link>
       </div>
+
+      {!canEdit && (
+        <ReadOnlyBanner description="Seu perfil pode consultar os dados do jogador e os periodos cadastrados, mas nao pode salvar alteracoes, abrir novos periodos ou excluir o cadastro." />
+      )}
 
       {/* Player */}
       <div className="space-y-3 rounded-2xl border border-zinc-800 p-4">
@@ -366,6 +402,7 @@ export default function EditarJogadorPage() {
               className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
+              disabled={!canEdit}
             />
           </div>
 
@@ -375,6 +412,7 @@ export default function EditarJogadorPage() {
               className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 font-mono tracking-widest"
               value={pin}
               onChange={(e) => setPin(sanitizePin(e.target.value))}
+              disabled={!canEdit}
             />
           </div>
         </div>
@@ -386,37 +424,42 @@ export default function EditarJogadorPage() {
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="Observações"
+            disabled={!canEdit}
           />
         </div>
 
-        <Button onClick={savePlayer} disabled={saving}>
-          Salvar jogador
-        </Button>
+        {canEdit && (
+          <Button onClick={savePlayer} disabled={saving}>
+            Salvar jogador
+          </Button>
+        )}
 
         {msg && (
           <div className="text-sm text-zinc-200 bg-zinc-950/60 border border-zinc-800 rounded-xl p-3">{msg}</div>
         )}
       </div>
 
-      <div className="space-y-3 rounded-2xl border border-red-900/50 bg-red-950/15 p-4">
-        <div>
-          <h2 className="text-lg font-semibold text-red-100">Zona de exclusao</h2>
-          <p className="text-sm text-red-200/80">
-            A exclusao remove definitivamente o jogador e tambem os periodos, transacoes,
-            allocations e perdoes vinculados a ele.
-          </p>
-        </div>
-
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-sm text-red-200/70">
-            Use apenas quando tiver certeza. Essa acao nao pode ser desfeita pelo sistema.
+      {canEdit && (
+        <div className="space-y-3 rounded-2xl border border-red-900/50 bg-red-950/15 p-4">
+          <div>
+            <h2 className="text-lg font-semibold text-red-100">Zona de exclusao</h2>
+            <p className="text-sm text-red-200/80">
+              A exclusao remove definitivamente o jogador e tambem os periodos, transacoes,
+              allocations e perdoes vinculados a ele.
+            </p>
           </div>
 
-          <Button variant="destructive" onClick={deletePlayer} disabled={deleting || saving}>
-            {deleting ? "Excluindo..." : "Excluir jogador"}
-          </Button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-sm text-red-200/70">
+              Use apenas quando tiver certeza. Essa acao nao pode ser desfeita pelo sistema.
+            </div>
+
+            <Button variant="destructive" onClick={deletePlayer} disabled={deleting || saving}>
+              {deleting ? "Excluindo..." : "Excluir jogador"}
+            </Button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Memberships */}
       <div className="space-y-4 rounded-2xl border border-zinc-800 p-4">
@@ -433,37 +476,37 @@ export default function EditarJogadorPage() {
           )}
         </div>
 
-        {/* Abrir novo período */}
-        <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
+        {canEdit && (
+          <div className="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4 space-y-3">
           <div>
-            <div className="font-medium">Abrir novo período</div>
+              <div className="font-medium">Abrir novo período</div>
             <div className="text-sm text-zinc-400">
-              Você pode cadastrar o jogador hoje, mas fazer ele começar a pagar a partir de um mês específico.
+                Você pode cadastrar o jogador hoje, mas fazer ele começar a pagar a partir de um mês específico.
             </div>
           </div>
 
           <div className="grid md:grid-cols-3 gap-3 items-end">
             <div>
-              <label className="text-sm text-zinc-300">Início do período (participação)</label>
+                <label className="text-sm text-zinc-300">Início do período (participação)</label>
               <div className="mt-1">
                 <DatePicker date={newStart} onChange={setNewStart} />
               </div>
             </div>
 
             <div>
-              <label className="text-sm text-zinc-300">Começa a pagar a partir de</label>
+                <label className="text-sm text-zinc-300">Começa a pagar a partir de</label>
               <input
                 type="month"
                 className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2"
                 value={newBillingMonth}
                 onChange={(e) => setNewBillingMonth(e.target.value)}
               />
-              <div className="text-xs text-zinc-500 mt-1">Cobrança conta só a partir deste mês.</div>
+                <div className="text-xs text-zinc-500 mt-1">Cobrança conta só a partir deste mês.</div>
             </div>
 
             <div className="flex gap-2 md:justify-end">
               <Button onClick={openNewMembership} disabled={saving}>
-                Abrir período
+                  Abrir período
               </Button>
               {activeMembership && (
                 <Button variant="outline" onClick={closeActiveMembership} disabled={saving}>
@@ -472,7 +515,8 @@ export default function EditarJogadorPage() {
               )}
             </div>
           </div>
-        </div>
+          </div>
+        )}
 
         {/* Períodos cadastrados */}
         <div className="rounded-2xl border border-zinc-800 bg-zinc-950/30 p-4 space-y-3">
@@ -498,6 +542,7 @@ export default function EditarJogadorPage() {
                         onChange={(e) =>
                           setEditMap((prev) => ({ ...prev, [m.id]: { ...row, started: e.target.value } }))
                         }
+                        disabled={!canEdit}
                       />
                     </div>
 
@@ -511,6 +556,7 @@ export default function EditarJogadorPage() {
                           setEditMap((prev) => ({ ...prev, [m.id]: { ...row, ended: e.target.value } }))
                         }
                         placeholder="Em aberto"
+                        disabled={!canEdit}
                       />
                     </div>
 
@@ -523,18 +569,21 @@ export default function EditarJogadorPage() {
                         onChange={(e) =>
                           setEditMap((prev) => ({ ...prev, [m.id]: { ...row, billingMonth: e.target.value } }))
                         }
+                        disabled={!canEdit}
                       />
                       <div className="text-xs text-zinc-500 mt-1">Atual: {fmtMonthPt(m.billing_start_month)}</div>
                     </div>
 
-                    <div className="flex gap-2 md:justify-end">
-                      <Button variant="outline" onClick={() => saveMembership(m.id)} disabled={saving}>
-                        Salvar período
-                      </Button>
-                      <Button variant="outline" onClick={() => deleteMembership(m.id)} disabled={saving}>
-                        Remover
-                      </Button>
-                    </div>
+                    {canEdit && (
+                      <div className="flex gap-2 md:justify-end">
+                        <Button variant="outline" onClick={() => saveMembership(m.id)} disabled={saving}>
+                          Salvar período
+                        </Button>
+                        <Button variant="outline" onClick={() => deleteMembership(m.id)} disabled={saving}>
+                          Remover
+                        </Button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="text-xs text-zinc-500 mt-3">ID: {m.id}</div>

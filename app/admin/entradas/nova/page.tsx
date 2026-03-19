@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { useAdminRole } from "@/components/admin/admin-role-provider";
+import { AdminOnlyNotice } from "@/components/admin/admin-access-notice";
 
 type Player = { id: string; full_name: string };
 
@@ -12,6 +14,7 @@ function safeYearFromDate(dateISO: string) {
 }
 
 export default function NovaEntradaPage() {
+  const { loading: roleLoading, isAdmin } = useAdminRole();
   const [players, setPlayers] = useState<Player[]>([]);
   const [playerId, setPlayerId] = useState<string>(""); // "" => sem jogador
   const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
@@ -98,6 +101,20 @@ export default function NovaEntradaPage() {
     setAmount(0);
     setDescription("");
     // mantém seleção do jogador como está
+  }
+
+  if (roleLoading) {
+    return <div className="text-zinc-400">Carregando...</div>;
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminOnlyNotice
+        title="Nova entrada"
+        description="Somente administradores podem lancar novas entradas."
+        backHref="/admin/financeiro"
+      />
+    );
   }
 
   return (

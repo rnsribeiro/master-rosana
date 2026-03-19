@@ -2,8 +2,11 @@
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { useAdminRole } from "@/components/admin/admin-role-provider";
+import { AdminOnlyNotice } from "@/components/admin/admin-access-notice";
 
 export default function NovaSaidaPage() {
+  const { loading: roleLoading, isAdmin } = useAdminRole();
   const [date, setDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
   const [amount, setAmount] = useState<number>(0);
   const [description, setDescription] = useState("");
@@ -47,6 +50,20 @@ export default function NovaSaidaPage() {
     setAmount(0);
     setDescription("");
     setFile(null);
+  }
+
+  if (roleLoading) {
+    return <div className="text-zinc-400">Carregando...</div>;
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminOnlyNotice
+        title="Nova saida"
+        description="Somente administradores podem lancar novas saidas."
+        backHref="/admin/financeiro"
+      />
+    );
   }
 
   return (

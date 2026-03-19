@@ -28,6 +28,44 @@ async function requireAdminOrViewer() {
   return { ok: true as const };
 }
 
+function formatGeneratedAt(date: Date) {
+  const parts = new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+
+  const valueByType = new Map(parts.map((part) => [part.type, part.value]));
+
+  return [
+    valueByType.get("day"),
+    "/",
+    valueByType.get("month"),
+    "/",
+    valueByType.get("year"),
+    " ",
+    valueByType.get("hour"),
+    ":",
+    valueByType.get("minute"),
+    ":",
+    valueByType.get("second"),
+    " (horario de Brasilia)",
+  ].join("");
+}
+
+function formatTransactionTimestamp(value: string | null) {
+  if (!value) {
+    return "Nenhum registro encontrado";
+  }
+
+  return formatGeneratedAt(new Date(value));
+}
+
 export async function GET(req: Request) {
   const gate = await requireAdminOrViewer();
   if (!gate.ok) {
@@ -42,7 +80,7 @@ export async function GET(req: Request) {
   }
 
   try {
-    const [playersRes, membershipsRes, allocationsRes, forgivenessRes, feesRes] =
+    const [playersRes, membershipsRes, allocationsRes, forgivenessRes, feesRes, latestTransactionRes] =
       await Promise.all([
         supabaseAdmin.from("players").select("id, full_name").order("full_name", { ascending: true }),
         supabaseAdmin
@@ -57,6 +95,12 @@ export async function GET(req: Request) {
           .select("player_id, year, month, amount")
           .eq("year", year),
         supabaseAdmin.from("year_fees").select("year, monthly_fee").eq("year", year),
+        supabaseAdmin
+          .from("transactions")
+          .select("created_at")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ]);
 
     const firstError =
@@ -64,7 +108,8 @@ export async function GET(req: Request) {
       membershipsRes.error ??
       allocationsRes.error ??
       forgivenessRes.error ??
-      feesRes.error;
+      feesRes.error ??
+      latestTransactionRes.error;
 
     if (firstError) {
       throw firstError;
@@ -79,7 +124,10 @@ export async function GET(req: Request) {
       fees: feesRes.data ?? [],
     });
 
-    const svg = renderAnnualStatusSvg(grid);
+    const svg = renderAnnualStatusSvg(grid, {
+      generatedAtLabel: formatGeneratedAt(new Date()),
+      lastUpdatedLabel: formatTransactionTimestamp(latestTransactionRes.data?.created_at ?? null),
+    });
 
     return new NextResponse(svg, {
       headers: {

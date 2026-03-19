@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
+import { useAdminRole } from "@/components/admin/admin-role-provider";
+import { ReadOnlyBanner } from "@/components/admin/admin-access-notice";
 
 type Player = {
   id: string;
@@ -32,6 +34,7 @@ function fmtBR(dateISO: string | null) {
 }
 
 export default function JogadoresPage() {
+  const { canEdit } = useAdminRole();
   const [rows, setRows] = useState<PlayerRow[]>([]);
   const [q, setQ] = useState("");
   const [loading, setLoading] = useState(true);
@@ -108,7 +111,11 @@ export default function JogadoresPage() {
   }
 
   useEffect(() => {
-    load();
+    const timeoutId = window.setTimeout(() => {
+      void load();
+    }, 0);
+
+    return () => window.clearTimeout(timeoutId);
   }, []);
 
   const filtered = useMemo(() => {
@@ -119,7 +126,7 @@ export default function JogadoresPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Jogadores</h1>
           <p className="text-zinc-400 text-sm">
@@ -127,13 +134,19 @@ export default function JogadoresPage() {
           </p>
         </div>
 
-        <Link
-          href="/admin/jogadores/novo"
-          className="rounded-xl bg-zinc-100 text-zinc-950 px-4 py-2 font-medium"
-        >
-          Novo jogador
-        </Link>
+        {canEdit && (
+          <Link
+            href="/admin/jogadores/novo"
+            className="w-full rounded-xl bg-zinc-100 px-4 py-2 text-center font-medium text-zinc-950 sm:w-auto"
+          >
+            Novo jogador
+          </Link>
+        )}
       </div>
+
+      {!canEdit && (
+        <ReadOnlyBanner description="Seu perfil pode consultar a lista e abrir os detalhes dos jogadores, mas nao pode criar ou editar cadastros." />
+      )}
 
       <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4 space-y-3">
         <div className="flex flex-col md:flex-row gap-3 md:items-center">
@@ -185,7 +198,7 @@ export default function JogadoresPage() {
                         href={`/admin/jogadores/${p.id}`}
                         className="text-zinc-200 hover:text-white underline underline-offset-4"
                       >
-                        Editar
+                        {canEdit ? "Editar" : "Ver detalhes"}
                       </Link>
                     </td>
                   </tr>

@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import { supabase } from "@/lib/supabase/client";
 import { generatePin6, sanitizePin, isValidPin } from "@/lib/utils/pin";
 import { useRouter } from "next/navigation";
+import { useAdminRole } from "@/components/admin/admin-role-provider";
+import { AdminOnlyNotice } from "@/components/admin/admin-access-notice";
 
 function isISODate(s: string) {
   return /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -17,6 +19,7 @@ function monthToISOFirstDay(yyyyMm: string) {
 
 export default function NovoJogadorPage() {
   const router = useRouter();
+  const { loading: roleLoading, isAdmin } = useAdminRole();
 
   const [fullName, setFullName] = useState("");
   const [pin, setPin] = useState(generatePin6());
@@ -109,6 +112,20 @@ export default function NovoJogadorPage() {
 
     setLoading(false);
     router.replace(`/admin/jogadores/${playerId}`);
+  }
+
+  if (roleLoading) {
+    return <div className="text-zinc-400">Carregando...</div>;
+  }
+
+  if (!isAdmin) {
+    return (
+      <AdminOnlyNotice
+        title="Novo jogador"
+        description="Somente administradores podem cadastrar novos jogadores."
+        backHref="/admin/jogadores"
+      />
+    );
   }
 
   return (

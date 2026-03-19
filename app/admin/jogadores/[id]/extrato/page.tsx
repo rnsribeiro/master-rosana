@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase/client";
+import { useAdminRole } from "@/components/admin/admin-role-provider";
+import { ReadOnlyBanner } from "@/components/admin/admin-access-notice";
 
 type Fee = { year: number; monthly_fee: number };
 type Allocation = { year: number; month: number; amount: number };
@@ -28,13 +30,10 @@ function statusLabel(s: StatementMonth["status"]) {
 }
 
 export default function ExtratoJogadorPage({ params }: { params: { id: string } }) {
+  const { canEdit } = useAdminRole();
   const playerId = params.id;
 
   const [playerName, setPlayerName] = useState<string>("");
-  const [memberships, setMemberships] = useState<Membership[]>([]);
-  const [fees, setFees] = useState<Fee[]>([]);
-  const [allocations, setAllocations] = useState<Allocation[]>([]);
-  const [forgiveness, setForgiveness] = useState<Forg[]>([]);
   const [payments, setPayments] = useState<Payment[]>([]);
   const [months, setMonths] = useState<StatementMonth[]>([]);
   const [credit, setCredit] = useState<number>(0);
@@ -63,10 +62,6 @@ export default function ExtratoJogadorPage({ params }: { params: { id: string } 
       ]);
 
     setPlayerName(p?.full_name ?? "");
-    setMemberships((m ?? []) as Membership[]);
-    setFees((f ?? []) as Fee[]);
-    setAllocations((a ?? []) as Allocation[]);
-    setForgiveness((g ?? []) as Forg[]);
     setPayments((t ?? []) as Payment[]);
 
     // monta o “statement” no client para admin (rápido, sem API extra)
@@ -92,6 +87,11 @@ export default function ExtratoJogadorPage({ params }: { params: { id: string } 
   const openMonths = useMemo(() => months.filter((x) => x.status === "due" || x.status === "partial"), [months]);
 
   async function forgiveMonth(year: number, month: number, due: number) {
+    if (!canEdit) {
+      setMsg("Seu perfil esta em modo somente leitura.");
+      return;
+    }
+
     setMsg(null);
 
     const { data: sess } = await supabase.auth.getSession();
@@ -146,6 +146,10 @@ export default function ExtratoJogadorPage({ params }: { params: { id: string } 
         </div>
       </div>
 
+      {!canEdit && (
+        <ReadOnlyBanner description="Seu perfil pode consultar o extrato completo do jogador, mas nao pode aplicar perdao de divida." />
+      )}
+
       <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4">
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-2">
           <div>
@@ -163,20 +167,24 @@ export default function ExtratoJogadorPage({ params }: { params: { id: string } 
       )}
 
       <div className="bg-zinc-900/50 border border-zinc-800 rounded-2xl p-4 space-y-3">
-        <h2 className="text-lg font-semibold">Perdoar dívida (granular)</h2>
+        <h2 className="text-lg font-semibold">{canEdit ? "Perdoar dívida (granular)" : "Situacao mensal"}</h2>
         <p className="text-sm text-zinc-400">
-          Clique em “Perdoar” ao lado do mês. O valor perdoado será exatamente o “Em aberto” daquele mês.
+          {canEdit
+            ? "Clique em “Perdoar” ao lado do mês. O valor perdoado será exatamente o “Em aberto” daquele mês."
+            : "Visualizacao da situacao mensal do jogador, incluindo valores pagos, perdoados e em aberto."}
         </p>
 
-        <div>
-          <label className="text-sm text-zinc-300">Motivo (opcional)</label>
-          <input
-            className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none"
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            placeholder="Ex: acordo, isenção, retorno ao clube..."
-          />
-        </div>
+        {canEdit && (
+          <div>
+            <label className="text-sm text-zinc-300">Motivo (opcional)</label>
+            <input
+              className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-2 outline-none"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Ex: acordo, isencao, retorno ao clube..."
+            />
+          </div>
+        )}
 
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -188,7 +196,7 @@ export default function ExtratoJogadorPage({ params }: { params: { id: string } 
                 <th className="text-left py-2 pr-4">Perdoado</th>
                 <th className="text-left py-2 pr-4">Em aberto</th>
                 <th className="text-left py-2 pr-4">Status</th>
-                <th className="text-left py-2 pr-4"></th>
+                {canEdit && <th className="text-left py-2 pr-4"></th>}
               </tr>
             </thead>
             <tbody>
@@ -200,23 +208,25 @@ export default function ExtratoJogadorPage({ params }: { params: { id: string } 
                   <td className="py-2 pr-4">R$ {m.forgiven.toFixed(2)}</td>
                   <td className="py-2 pr-4">R$ {m.due.toFixed(2)}</td>
                   <td className="py-2 pr-4">{statusLabel(m.status)}</td>
-                  <td className="py-2 pr-4">
-                    {(m.status === "due" || m.status === "partial") && m.due > 0 ? (
-                      <button
-                        onClick={() => forgiveMonth(m.year, m.month, m.due)}
-                        className="rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-1.5 hover:border-zinc-600"
-                      >
-                        Perdoar
-                      </button>
-                    ) : (
-                      <span className="text-zinc-500">—</span>
-                    )}
-                  </td>
+                  {canEdit && (
+                    <td className="py-2 pr-4">
+                      {(m.status === "due" || m.status === "partial") && m.due > 0 ? (
+                        <button
+                          onClick={() => forgiveMonth(m.year, m.month, m.due)}
+                          className="rounded-xl bg-zinc-950 border border-zinc-800 px-3 py-1.5 hover:border-zinc-600"
+                        >
+                          Perdoar
+                        </button>
+                      ) : (
+                        <span className="text-zinc-500">—</span>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
               {months.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="py-3 text-zinc-400">
+                  <td colSpan={canEdit ? 7 : 6} className="py-3 text-zinc-400">
                     Nenhum mês cobrável. Verifique se existe pelo menos um período de participação.
                   </td>
                 </tr>
