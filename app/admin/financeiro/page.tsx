@@ -160,6 +160,13 @@ function ymLabel(dateISO: string) {
   return `${mm}/${d.getFullYear()}`;
 }
 
+function getCurrentBrazilYear() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+  }).format(new Date());
+}
+
 function isUuid(v: string) {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(v);
 }
@@ -183,7 +190,7 @@ export default function FinanceiroAdminPage() {
   const [txs, setTxs] = useState<TxRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [snapshotYear, setSnapshotYear] = useState(String(new Date().getFullYear()));
+  const [snapshotYear, setSnapshotYear] = useState(() => getCurrentBrazilYear());
   const [snapshotLoading, setSnapshotLoading] = useState<SnapshotFormat | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");

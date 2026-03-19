@@ -41,7 +41,11 @@ function statusStyle(status: AnnualStatusCellStatus) {
 
 export function renderAnnualStatusSvg(
   grid: AnnualStatusGrid,
-  options?: { generatedAtLabel?: string; lastUpdatedLabel?: string }
+  options?: {
+    generatedAtLabel?: string;
+    lastMonthlyPaymentLabel?: string;
+    lastMonthlyPaymentYear?: number;
+  }
 ) {
   const padding = 28;
   const titleHeight = 34;
@@ -132,18 +136,22 @@ export function renderAnnualStatusSvg(
     .join("");
 
   const generatedAtLabel = options?.generatedAtLabel?.trim();
-  const lastUpdatedLabel = options?.lastUpdatedLabel?.trim();
+  const lastMonthlyPaymentLabel = options?.lastMonthlyPaymentLabel?.trim();
+  const lastMonthlyPaymentYear = options?.lastMonthlyPaymentYear;
   const generatedText = generatedAtLabel
     ? `Gerado em ${generatedAtLabel}`
     : "Gerado automaticamente pelo sistema.";
-  const lastUpdatedText = lastUpdatedLabel
-    ? `Ultimo registro encontrado em ${lastUpdatedLabel}`
-    : "Ultimo registro encontrado em: informacao indisponivel.";
+  const monthlyPaymentPrefix = lastMonthlyPaymentYear
+    ? `Ano atual (${lastMonthlyPaymentYear})`
+    : "Ano atual";
+  const monthlyPaymentText = lastMonthlyPaymentLabel
+    ? `${monthlyPaymentPrefix}: ${lastMonthlyPaymentLabel}`
+    : `${monthlyPaymentPrefix}: nenhum pagamento de mensalidade encontrado.`;
 
   const infoCards = [
     {
-      title: "ULTIMA ATUALIZACAO",
-      value: lastUpdatedText,
+      title: "ULTIMA MENSALIDADE DO ANO ATUAL",
+      value: monthlyPaymentText,
       y: infoY,
       fill: "#dbeafe",
       stroke: "#60a5fa",

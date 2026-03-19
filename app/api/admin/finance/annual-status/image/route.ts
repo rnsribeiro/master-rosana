@@ -58,11 +58,17 @@ function formatGeneratedAt(date: Date) {
   ].join("");
 }
 
-function formatTransactionTimestamp(value: string | null) {
-  if (!value) {
-    return "Nenhum registro encontrado";
-  }
+function getCurrentBrazilYear() {
+  return Number(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Sao_Paulo",
+      year: "numeric",
+    }).format(new Date())
+  );
+}
 
+function formatTimestamp(value: string | null) {
+  if (!value) return undefined;
   return formatGeneratedAt(new Date(value));
 }
 
@@ -80,7 +86,9 @@ export async function GET(req: Request) {
   }
 
   try {
-    const [playersRes, membershipsRes, allocationsRes, forgivenessRes, feesRes, latestTransactionRes] =
+    const currentBrazilYear = getCurrentBrazilYear();
+
+    const [playersRes, membershipsRes, allocationsRes, forgivenessRes, feesRes, latestMonthlyPaymentRes] =
       await Promise.all([
         supabaseAdmin.from("players").select("id, full_name").order("full_name", { ascending: true }),
         supabaseAdmin
@@ -96,8 +104,9 @@ export async function GET(req: Request) {
           .eq("year", year),
         supabaseAdmin.from("year_fees").select("year, monthly_fee").eq("year", year),
         supabaseAdmin
-          .from("transactions")
+          .from("allocations")
           .select("created_at")
+          .eq("year", currentBrazilYear)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle(),
@@ -109,7 +118,7 @@ export async function GET(req: Request) {
       allocationsRes.error ??
       forgivenessRes.error ??
       feesRes.error ??
-      latestTransactionRes.error;
+      latestMonthlyPaymentRes.error;
 
     if (firstError) {
       throw firstError;
@@ -126,7 +135,8 @@ export async function GET(req: Request) {
 
     const svg = renderAnnualStatusSvg(grid, {
       generatedAtLabel: formatGeneratedAt(new Date()),
-      lastUpdatedLabel: formatTransactionTimestamp(latestTransactionRes.data?.created_at ?? null),
+      lastMonthlyPaymentLabel: formatTimestamp(latestMonthlyPaymentRes.data?.created_at ?? null),
+      lastMonthlyPaymentYear: currentBrazilYear,
     });
 
     return new NextResponse(svg, {
